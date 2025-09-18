@@ -15,7 +15,7 @@ import Data.Lazy as Lazy
 import Data.List (List)
 import Data.Map (Map)
 import Data.Map as Map
-import Data.Maybe (Maybe, maybe)
+import Data.Maybe (Maybe(..), maybe)
 import Data.Set (Set)
 import Data.Set as Set
 import Data.Set.NonEmpty as NonEmptySet
@@ -108,12 +108,13 @@ basicBuildMain options = do
       liftEffect $ Process.exit' 1
     Right coreFnModules -> do
       options.onCodegenBefore
-      coreFnModules # buildModules
+      _ <- coreFnModules # buildModules
         { analyzeCustom: options.analyzeCustom
         , directives: allDirectives
         , foreignSemantics: options.foreignSemantics
         , onCodegenModule: options.onCodegenModule
         , onPrepareModule: \env mod -> Right <$> options.onPrepareModule env mod
         , traceIdents: options.traceIdents
+        , incremental: Nothing
         }
       options.onCodegenAfter
