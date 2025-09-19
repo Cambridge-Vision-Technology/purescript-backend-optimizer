@@ -30,6 +30,7 @@ import PureScript.Backend.Optimizer.Codegen.Tco (LocalRef, TcoAnalysis(..), TcoE
 import PureScript.Backend.Optimizer.Codegen.Tco as Tco
 import PureScript.Backend.Optimizer.Convert (BackendBindingGroup, BackendImplementations)
 import PureScript.Backend.Optimizer.CoreFn (ConstructorType(..), Ident(..), Literal(..), ModuleName, Prop(..), ProperName(..), Qualified(..), propValue, qualifiedModuleName, unQualified)
+import PureScript.Backend.Optimizer.QIMap as QIMap
 import PureScript.Backend.Optimizer.Semantics (CtorMeta, DataTypeMeta, ExternImpl(..), NeutralExpr)
 import PureScript.Backend.Optimizer.Syntax (BackendAccessor(..), BackendEffect(..), BackendOperator(..), BackendOperator1(..), BackendOperator2(..), BackendOperatorNum(..), BackendOperatorOrd(..), BackendSyntax(..), Level(..), Pair(..))
 
@@ -854,7 +855,7 @@ isLazyBinding currentModule group (Tuple _ tcoExpr) = go tcoExpr
       false
 
 lookupCtorInfo :: CodegenEnv -> Qualified Ident -> { ctorMeta :: CtorMeta, size :: Int }
-lookupCtorInfo (CodegenEnv env) qual = case Map.lookup qual env.implementations of
+lookupCtorInfo (CodegenEnv env) qual = case QIMap.lookup qual env.implementations of
   Just (Tuple _ (ExternCtor dm@{ size } _ _ tag _))
     | Just ctorMeta <- Map.lookup tag dm.constructors ->
         { ctorMeta, size }
