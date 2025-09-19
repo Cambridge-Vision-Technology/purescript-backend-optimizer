@@ -6,6 +6,7 @@ import Control.Alternative (guard)
 import Data.Array as Array
 import Data.Array.NonEmpty (NonEmptyArray)
 import Data.Array.NonEmpty as NonEmptyArray
+import Data.Bifunctor (lmap, rmap)
 import Data.Either (Either(..))
 import Data.Foldable (class Foldable, and, foldMap, foldl, foldr, or)
 import Data.Foldable as Foldable
@@ -15,7 +16,7 @@ import Data.Lazy (Lazy, defer, force)
 import Data.List as List
 import Data.Map (Map)
 import Data.Map as Map
-import Data.Maybe (Maybe(..))
+import Data.Maybe (Maybe(..), fromMaybe)
 import Data.Monoid (power)
 import Data.Newtype (class Newtype, unwrap)
 import Data.Set as Set
@@ -24,6 +25,7 @@ import Data.Tuple (Tuple(..), fst, snd)
 import Partial.Unsafe (unsafeCrashWith)
 import PureScript.Backend.Optimizer.Analysis (class HasAnalysis, BackendAnalysis(..), Capture(..), Complexity(..), ResultTerm(..), Usage(..), analysisOf, bound, bump, complex, resultOf, updated, withResult, withRewrite)
 import PureScript.Backend.Optimizer.CoreFn (ConstructorType, Ident(..), Literal(..), ModuleName, Prop(..), ProperName, Qualified(..), findProp, propKey, propValue)
+import PureScript.Backend.Optimizer.QIMap as QIMap
 import PureScript.Backend.Optimizer.Syntax (class HasSyntax, BackendAccessor(..), BackendEffect, BackendOperator(..), BackendOperator1(..), BackendOperator2(..), BackendOperatorNum(..), BackendOperatorOrd(..), BackendSyntax(..), Level(..), Pair(..), syntaxOf)
 import PureScript.Backend.Optimizer.Utils (foldl1Array, foldr1Array)
 
@@ -173,8 +175,6 @@ data InlineDirective
   | InlineAlways
   | InlineArity Int
 
-type InlineDirectiveMap = Map EvalRef (Map InlineAccessor InlineDirective)
-
 newtype Env = Env
   { currentModule :: ModuleName
   , evalExternRef :: Env -> Qualified Ident -> Maybe BackendSemantics
@@ -191,26 +191,41 @@ lookupLocal (Env { locals }) (Level lvl) = Array.index locals lvl
 bindLocal :: Env -> LocalBinding BackendSemantics -> Env
 bindLocal (Env env) sem = Env env { locals = Array.snoc env.locals sem }
 
+type InlineDirectiveMap = Tuple
+  (QIMap.QIMap (Map InlineAccessor InlineDirective))
+  (Map (Tuple (Maybe Ident) Level) (Map InlineAccessor InlineDirective))
+
 insertDirective :: EvalRef -> InlineAccessor -> InlineDirective -> InlineDirectiveMap -> InlineDirectiveMap
-insertDirective ref acc dir = Map.alter
+insertDirective (EvalExtern qual) acc dir = lmap $ QIMap.alter
   case _ of
     Just dirs ->
       Just $ Map.insert acc dir dirs
     Nothing ->
       Just $ Map.singleton acc dir
-  ref
+  qual
+insertDirective (EvalLocal ident lvl) acc dir = rmap $ Map.alter
+  case _ of
+    Just dirs ->
+      Just $ Map.insert acc dir dirs
+    Nothing ->
+      Just $ Map.singleton acc dir
+  (Tuple ident lvl)
 
 addStop :: Env -> EvalRef -> InlineAccessor -> Env
 addStop (Env env) ref acc = Env env
-  { directives = Map.alter
-      case _ of
-        Just dirs ->
-          Just $ Map.insert acc InlineNever dirs
-        _ ->
-          Just $ Map.singleton acc InlineNever
-      ref
-      env.directives
-  }
+  { directives = insertDirective ref acc InlineNever env.directives }
+
+lookupDirective :: EvalRef -> InlineDirectiveMap -> Map InlineAccessor InlineDirective
+lookupDirective (EvalExtern qual) (Tuple dirs _) =
+  fromMaybe Map.empty (QIMap.lookup qual dirs)
+lookupDirective (EvalLocal ident lvl) (Tuple _ dirs) =
+  fromMaybe Map.empty (Map.lookup (Tuple ident lvl) dirs)
+
+unionDirectives :: InlineDirectiveMap -> InlineDirectiveMap -> InlineDirectiveMap
+unionDirectives (Tuple q1 l1) (Tuple q2 l2) = Tuple (QIMap.union q1 q2) (Map.union l1 l2)
+
+noDirectives :: InlineDirectiveMap
+noDirectives = Tuple QIMap.empty Map.empty
 
 class Eval f where
   eval :: Env -> f -> BackendSemantics
@@ -945,12 +960,12 @@ envForGroup env ref acc group
   | otherwise = addStop env ref acc
 
 evalExternFromImpl :: Env -> Qualified Ident -> Tuple BackendAnalysis ExternImpl -> Array ExternSpine -> Maybe BackendSemantics
-evalExternFromImpl env@(Env e) qual (Tuple analysis impl) spine = case spine of
+evalExternFromImpl env@(Env { directives }) qual (Tuple analysis impl) spine = case spine of
   [] ->
     case impl of
       ExternExpr group expr -> do
         let ref = EvalExtern qual
-        case Map.lookup ref e.directives >>= Map.lookup InlineRef of
+        case lookupDirective ref directives # Map.lookup InlineRef of
           Just InlineNever ->
             Just $ NeutStop qual
           Just InlineAlways ->
@@ -973,7 +988,7 @@ evalExternFromImpl env@(Env e) qual (Tuple analysis impl) spine = case spine of
     case impl of
       ExternExpr group expr -> do
         let ref = EvalExtern qual
-        case Map.lookup ref e.directives >>= Map.lookup (InlineProp prop) of
+        case lookupDirective ref directives # Map.lookup (InlineProp prop) of
           Just InlineNever ->
             Just $ neutralSpine (NeutStop qual) spine
           Just InlineAlways ->
@@ -982,7 +997,7 @@ evalExternFromImpl env@(Env e) qual (Tuple analysis impl) spine = case spine of
             Nothing
       ExternDict group props | Just (Tuple analysis' body) <- findProp prop props -> do
         let ref = EvalExtern qual
-        case Map.lookup ref e.directives >>= Map.lookup (InlineProp prop) of
+        case lookupDirective ref directives # Map.lookup (InlineProp prop) of
           Just InlineNever ->
             Just $ neutralSpine (NeutStop qual) spine
           Just InlineAlways ->
@@ -999,7 +1014,7 @@ evalExternFromImpl env@(Env e) qual (Tuple analysis impl) spine = case spine of
     case impl of
       ExternExpr group expr -> do
         let ref = EvalExtern qual
-        case Map.lookup ref e.directives >>= Map.lookup (InlineProp prop) of
+        case lookupDirective ref directives # Map.lookup (InlineProp prop) of
           Just InlineNever ->
             Just $ neutralSpine (NeutStop qual) spine
           Just InlineAlways ->
@@ -1013,7 +1028,7 @@ evalExternFromImpl env@(Env e) qual (Tuple analysis impl) spine = case spine of
             Nothing
       ExternDict group props | Just (Tuple analysis' body) <- findProp prop props -> do
         let ref = EvalExtern qual
-        case Map.lookup ref e.directives >>= Map.lookup (InlineProp prop) of
+        case lookupDirective ref directives # Map.lookup (InlineProp prop) of
           Just InlineNever ->
             Just $ neutralSpine (NeutStop qual) spine
           Just InlineAlways ->
@@ -1033,7 +1048,7 @@ evalExternFromImpl env@(Env e) qual (Tuple analysis impl) spine = case spine of
     case impl of
       ExternExpr group expr -> do
         let ref = EvalExtern qual
-        case Map.lookup ref e.directives >>= Map.lookup InlineRef of
+        case lookupDirective ref directives # Map.lookup InlineRef of
           Just InlineNever ->
             Just $ neutralSpine (NeutStop qual) spine
           Just InlineAlways ->
@@ -1055,7 +1070,7 @@ evalExternFromImpl env@(Env e) qual (Tuple analysis impl) spine = case spine of
     case impl of
       ExternExpr group fn -> do
         let ref = EvalExtern qual
-        case Map.lookup ref e.directives >>= Map.lookup (InlineSpineProp prop) of
+        case lookupDirective ref directives # Map.lookup (InlineSpineProp prop) of
           Just InlineNever ->
             Just $ neutralSpine (NeutStop qual) spine
           Just InlineAlways ->
@@ -1068,7 +1083,7 @@ evalExternFromImpl env@(Env e) qual (Tuple analysis impl) spine = case spine of
     case impl of
       ExternExpr group fn -> do
         let ref = EvalExtern qual
-        case Map.lookup ref e.directives >>= Map.lookup (InlineSpineProp prop) of
+        case lookupDirective ref directives # Map.lookup (InlineSpineProp prop) of
           Just InlineNever ->
             Just $ neutralSpine (NeutStop qual) spine
           Just InlineAlways ->

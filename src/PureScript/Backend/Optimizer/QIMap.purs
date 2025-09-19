@@ -79,6 +79,17 @@ _insertQ q i v (QIMap qm um) = QIMap (Map.alter inner q qm) um
 _insertU :: forall v. Ident -> v -> QIMap v -> QIMap v
 _insertU i v (QIMap qm um) = QIMap qm (Map.insert i v um)
 
+alter :: forall v. (Maybe v -> Maybe v) -> Qualified Ident -> QIMap v -> QIMap v
+alter v (Qualified (Just q) i) = _alterQ q i v
+alter v (Qualified _ i) = _alterU i v
+_alterQ :: forall v. ModuleName -> Ident -> (Maybe v -> Maybe v) -> QIMap v -> QIMap v
+_alterQ q i v (QIMap qm um) = QIMap (Map.alter inner q qm) um
+  where
+  inner (Just im) = Just (Map.alter v i im)
+  inner _ = Just (maybe Map.empty (Map.singleton i) (v Nothing))
+_alterU :: forall v. Ident -> (Maybe v -> Maybe v) -> QIMap v -> QIMap v
+_alterU i v (QIMap qm um) = QIMap qm (Map.alter v i um)
+
 lookup :: forall v. Qualified Ident -> QIMap v -> Maybe v
 lookup (Qualified (Just q) i) = _lookupQ q i
 lookup (Qualified _ i) = _lookupU i

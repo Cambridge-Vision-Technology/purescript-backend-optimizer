@@ -52,6 +52,7 @@ import Control.Monad.RWS (ask)
 import Data.Array as Array
 import Data.Array.NonEmpty (NonEmptyArray)
 import Data.Array.NonEmpty as NonEmptyArray
+import Data.Bifunctor (lmap)
 import Data.Foldable (foldMap, foldl)
 import Data.FoldableWithIndex (foldMapWithIndex, foldlWithIndex, foldrWithIndex)
 import Data.Function (on)
@@ -75,7 +76,7 @@ import PureScript.Backend.Optimizer.CoreFn (Ann(..), Bind(..), Binder(..), Bindi
 import PureScript.Backend.Optimizer.Directives (DirectiveHeaderResult, parseDirectiveHeader)
 import PureScript.Backend.Optimizer.QIMap (QIMap)
 import PureScript.Backend.Optimizer.QIMap as QIMap
-import PureScript.Backend.Optimizer.Semantics (BackendExpr(..), BackendSemantics, Ctx(..), DataTypeMeta, Env(..), EvalRef(..), ExternImpl(..), ExternSpine, InlineAccessor(..), InlineDirective(..), InlineDirectiveMap, NeutralExpr(..), build, evalExternFromImpl, evalExternRefFromImpl, freeze, optimize)
+import PureScript.Backend.Optimizer.Semantics (BackendExpr(..), BackendSemantics, Ctx(..), DataTypeMeta, Env(..), EvalRef(..), ExternImpl(..), ExternSpine, InlineAccessor(..), InlineDirective(..), InlineDirectiveMap, NeutralExpr(..), build, evalExternFromImpl, evalExternRefFromImpl, freeze, lookupDirective, optimize, unionDirectives)
 import PureScript.Backend.Optimizer.Semantics.Foreign (ForeignEval)
 import PureScript.Backend.Optimizer.Syntax (BackendAccessor(..), BackendOperator(..), BackendOperator1(..), BackendOperator2(..), BackendOperatorOrd(..), BackendSyntax(..), Level(..), Pair(..))
 import PureScript.Backend.Optimizer.Utils (foldl1Array)
@@ -149,13 +150,7 @@ toBackendModule (Module mod) env = do
     moduleBindings :: Accum ConvertEnv (Array (BackendBindingGroup Ident (WithDeps NeutralExpr)))
     moduleBindings = toBackendTopLevelBindingGroups mod.decls env
       { dataTypes = dataTypes
-      , directives =
-          foldlWithIndex
-            ( \qual dirs dir ->
-                Map.alter (maybe (Just dir) Just) qual dirs
-            )
-            (Map.union directives.locals env.directives)
-            directives.exports
+      , directives = unionDirectives directives.locals (unionDirectives env.directives directives.exports)
       , moduleImplementations = QIMap.empty
       }
 
@@ -259,13 +254,15 @@ toTopLevelBackendBinding group env (Binding _ ident cfn) = do
       , directives =
           case inferTransitiveDirective env.directives (snd impl) backendExpr cfn of
             Just dirs ->
-              Map.alter
-                case _ of
-                  Just oldDirs ->
-                    Just $ Map.union oldDirs dirs
-                  Nothing ->
-                    Just dirs
-                (EvalExtern (Qualified (Just env.currentModule) ident))
+              lmap
+                ( QIMap.alter
+                    case _ of
+                      Just oldDirs ->
+                        Just $ Map.union oldDirs dirs
+                      Nothing ->
+                        Just dirs
+                  (Qualified (Just env.currentModule) ident)
+                )
                 env.directives
             Nothing ->
               env.directives
@@ -277,32 +274,28 @@ inferTransitiveDirective :: InlineDirectiveMap -> ExternImpl -> BackendExpr -> E
 inferTransitiveDirective directives impl backendExpr cfn = fromImpl <|> fromBackendExpr
   where
   fromImpl = case impl of
-    ExternExpr _ (NeutralExpr (App (NeutralExpr (Var qual)) args)) ->
-      case Map.lookup (EvalExtern qual) directives of
-        Just dirs -> do
-          let
-            newDirs = foldrWithIndex
-              ( \ix dir accum -> case ix, dir of
-                  InlineRef, (InlineArity n) ->
-                    accum
-                      # Map.insert InlineRef (InlineArity (n - NonEmptyArray.length args))
-                  InlineSpineProp prop, _ ->
-                    accum
-                      # Map.insert (InlineProp prop) dir
-                      # Map.insert (InlineSpineProp prop) dir
-                  _, _ ->
-                    accum
-              )
-              Map.empty
-              dirs
-          if Map.isEmpty newDirs then
-            Nothing
-          else
-            Just newDirs
-        _ ->
-          Nothing
+    ExternExpr _ (NeutralExpr (App (NeutralExpr (Var qual)) args)) -> do
+      let
+        newDirs = foldrWithIndex
+          ( \ix dir accum -> case ix, dir of
+              InlineRef, (InlineArity n) ->
+                accum
+                  # Map.insert InlineRef (InlineArity (n - NonEmptyArray.length args))
+              InlineSpineProp prop, _ ->
+                accum
+                  # Map.insert (InlineProp prop) dir
+                  # Map.insert (InlineSpineProp prop) dir
+              _, _ ->
+                accum
+          )
+          Map.empty
+          (lookupDirective (EvalExtern qual) directives)
+      if Map.isEmpty newDirs then
+        Nothing
+      else
+        Just newDirs
     ExternExpr _ (NeutralExpr (Accessor (NeutralExpr (App (NeutralExpr (Var qual)) _)) (GetProp prop))) ->
-      case Map.lookup (EvalExtern qual) directives >>= Map.lookup (InlineSpineProp prop) of
+      case lookupDirective (EvalExtern qual) directives # Map.lookup (InlineSpineProp prop) of
         Just (InlineArity n) ->
           Just $ Map.singleton InlineRef (InlineArity n)
         _ ->
@@ -312,7 +305,7 @@ inferTransitiveDirective directives impl backendExpr cfn = fromImpl <|> fromBack
 
   fromBackendExpr = case backendExpr of
     ExprSyntax _ (App (ExprSyntax _ (Var qual)) args) ->
-      case Map.lookup (EvalExtern qual) directives >>= Map.lookup InlineRef of
+      case lookupDirective (EvalExtern qual) directives # Map.lookup InlineRef of
         Just (InlineArity n)
           | ExprApp (Ann { meta: Just IsSyntheticApp }) _ _ <- cfn
           , arity <- NonEmptyArray.length args
