@@ -73,6 +73,8 @@ import Partial.Unsafe (unsafeCrashWith, unsafePartial)
 import PureScript.Backend.Optimizer.Analysis (BackendAnalysis, analyze, analyzeEffectBlock)
 import PureScript.Backend.Optimizer.CoreFn (Ann(..), Bind(..), Binder(..), Binding(..), CaseAlternative(..), CaseGuard(..), Comment, ConstructorType(..), Expr(..), Guard(..), Ident(..), Literal(..), Meta(..), Module(..), ModuleName(..), ProperName, Qualified(..), ReExport, findProp, propKey, propValue, qualifiedModuleName, unQualified)
 import PureScript.Backend.Optimizer.Directives (DirectiveHeaderResult, parseDirectiveHeader)
+import PureScript.Backend.Optimizer.QIMap (QIMap)
+import PureScript.Backend.Optimizer.QIMap as QIMap
 import PureScript.Backend.Optimizer.Semantics (BackendExpr(..), BackendSemantics, Ctx(..), DataTypeMeta, Env(..), EvalRef(..), ExternImpl(..), ExternSpine, InlineAccessor(..), InlineDirective(..), InlineDirectiveMap, NeutralExpr(..), build, evalExternFromImpl, evalExternRefFromImpl, freeze, optimize)
 import PureScript.Backend.Optimizer.Semantics.Foreign (ForeignEval)
 import PureScript.Backend.Optimizer.Syntax (BackendAccessor(..), BackendOperator(..), BackendOperator1(..), BackendOperator2(..), BackendOperatorOrd(..), BackendSyntax(..), Level(..), Pair(..))
@@ -84,7 +86,7 @@ type BackendBindingGroup a b =
   , bindings :: Array (Tuple a b)
   }
 
-type BackendImplementations = Map (Qualified Ident) (Tuple BackendAnalysis ExternImpl)
+type BackendImplementations = QIMap (Tuple BackendAnalysis ExternImpl)
 
 type BackendModule =
   { name :: ModuleName
@@ -109,7 +111,7 @@ type ConvertEnv =
   , moduleImplementations :: BackendImplementations
   , optimizationSteps :: OptimizationSteps
   , directives :: InlineDirectiveMap
-  , foreignSemantics :: Map (Qualified Ident) ForeignEval
+  , foreignSemantics :: QIMap ForeignEval
   , rewriteLimit :: Int
   , traceIdents :: Set (Qualified Ident)
   }
@@ -154,7 +156,7 @@ toBackendModule (Module mod) env = do
             )
             (Map.union directives.locals env.directives)
             directives.exports
-      , moduleImplementations = Map.empty
+      , moduleImplementations = QIMap.empty
       }
 
     localExports :: Set Ident
@@ -251,8 +253,8 @@ toTopLevelBackendBinding group env (Binding _ ident cfn) = do
   let Tuple mbSteps optimizedExpr = optimize enableTracing (getCtx env) evalEnv qualifiedIdent env.rewriteLimit backendExpr
   let Tuple impl expr' = toExternImpl env group optimizedExpr
   { accum: env
-      { implementations = Map.insert qualifiedIdent impl env.implementations
-      , moduleImplementations = Map.insert qualifiedIdent impl env.moduleImplementations
+      { implementations = QIMap.insert qualifiedIdent impl env.implementations
+      , moduleImplementations = QIMap.insert qualifiedIdent impl env.moduleImplementations
       , optimizationSteps = maybe env.optimizationSteps (Array.snoc env.optimizationSteps <<< Tuple qualifiedIdent) $ NonEmptyArray.fromArray mbSteps
       , directives =
           case inferTransitiveDirective env.directives (snd impl) backendExpr cfn of
@@ -341,18 +343,18 @@ makeExternEvalSpine :: ConvertEnv -> Env -> Qualified Ident -> Array ExternSpine
 makeExternEvalSpine conv env qual spine = do
   let
     result = do
-      fn <- Map.lookup qual conv.foreignSemantics
+      fn <- QIMap.lookup qual conv.foreignSemantics
       fn env qual spine
   case result of
     Nothing -> do
-      impl <- Map.lookup qual conv.implementations
+      impl <- QIMap.lookup qual conv.implementations
       evalExternFromImpl (topEnv env) qual impl spine
     _ ->
       result
 
 makeExternEvalRef :: ConvertEnv -> Env -> Qualified Ident -> Maybe BackendSemantics
 makeExternEvalRef conv env qual =
-  evalExternRefFromImpl env qual <$> Map.lookup qual conv.implementations
+  evalExternRefFromImpl env qual <$> QIMap.lookup qual conv.implementations
 
 buildM :: BackendSyntax BackendExpr -> ConvertM BackendExpr
 buildM a env = build (getCtx env) a
@@ -373,7 +375,7 @@ getCtx env = Ctx
   }
   where
   lookupExtern qual acc = do
-    Tuple s impl <- Map.lookup qual env.implementations
+    Tuple s impl <- QIMap.lookup qual env.implementations
     case impl of
       ExternExpr _ _ ->
         case acc of
@@ -644,7 +646,7 @@ binderToPattern = case _ of
       Just fields -> pure fields
       Nothing -> unsafeCrashWith "Invariant broken: could not determine pattern matched constructor's fields during conversion."
     where
-    importedCtorFields implementations = case Map.lookup ctor implementations of
+    importedCtorFields implementations = case QIMap.lookup ctor implementations of
       Just (Tuple _ (ExternCtor _ _ _ _ fields)) -> Just fields
       _ -> Nothing
 
