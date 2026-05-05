@@ -376,11 +376,21 @@ decodeBoolean = caseJson fail Right fail fail fail fail
   fail :: forall a. a -> JsonDecode Boolean
   fail _ = Left $ TypeMismatch "Boolean"
 
+-- | CVT fork patch — accept any integer-valued Number, not just those in the
+-- | 32-bit signed range that `Int.fromNumber` enforces. CoreFn JSON emitted by
+-- | the purerl backend may carry integer literals beyond 2^31 - 1: Erlang has
+-- | arbitrary-precision integers, and idiomatic time-handling like
+-- | `megaSecs * 1_000_000_000_000` is legitimate at the source level. Clamping
+-- | here aborts otherwise-correct codegen with `Expected Int`.
+-- |
+-- | The `unsafeCoerce` after `isInteger` mirrors the runtime-bundle patch
+-- | previously carried inline in Cambridge-Vision-Technology/blackbriar
+-- | (`purs-backend-erl-corefn-patcher.js`); this fork moves that fix to source.
 decodeInt :: Json -> JsonDecode Int
 decodeInt json = do
   num <- decodeNumber json
-  case Int.fromNumber num of
-    Nothing ->
-      Left $ TypeMismatch "Int"
-    Just int ->
-      Right int
+  if isInteger num
+    then Right (unsafeCoerce num)
+    else Left $ TypeMismatch "Int"
+
+foreign import isInteger :: Number -> Boolean
