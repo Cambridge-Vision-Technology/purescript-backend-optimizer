@@ -247,6 +247,77 @@
                     (builtins.readFile ./backend-es/spago.yaml)) + "\n    execArgs: ${builtins.toJSON [ "corefn-int-literals" ]}\n");
               })))
             "${lib.getExe' tools.nodejs "npm"} run test";
+          upstreamDecoderEvidence = upstream:
+            let
+              upstreamSource = lib.fileset.toSource {
+                root = upstream;
+                fileset = lib.fileset.unions [
+                  (upstream + "/src")
+                  (upstream + "/backend-es/src")
+                ];
+              };
+              upstreamTestSource = lib.fileset.toSource {
+                root = upstream + "/backend-es/test";
+                fileset = upstream + "/backend-es/test/CoreFnJson.purs";
+              };
+              configSource = lib.fileset.toSource {
+                root = ./.;
+                fileset = lib.fileset.unions [
+                  ./spago.yaml
+                  ./spago.lock
+                  ./backend-es/spago.yaml
+                  ./package.json
+                ];
+              };
+              helperSource = lib.fileset.toSource {
+                root = ./backend-es/test;
+                fileset = lib.fileset.unions [
+                  ./backend-es/test/DecoderRunner.purs
+                  ./backend-es/test/Utils.purs
+                  ./backend-es/test/Utils.js
+                  ./backend-es/test/SnapshotPolicy.purs
+                  ./backend-es/test/SnapshotRunner.purs
+                  ./backend-es/test/Platform/Node/SnapshotProcess.purs
+                  ./backend-es/test/Platform/Node/SnapshotProcess.js
+                ];
+              };
+              upstreamLayout = {
+                src = "${upstreamSource}/src";
+                "backend-es/src" = "${upstreamSource}/backend-es/src";
+                "spago.yaml" = "${configSource}/spago.yaml";
+                "spago.lock" = "${configSource}/spago.lock";
+                "backend-es/spago.yaml" = "${configSource}/backend-es/spago.yaml";
+              };
+              build = compiled.overrideAttrs (_: {
+                name = "purs-backend-es-upstream-compiled-${version}";
+                src = copyLayout "backend-es-upstream-compile-workspace"
+                  (pkgs.linkFarm "backend-es-upstream-compile-layout" upstreamLayout);
+              });
+              testSource = copyLayout "backend-es-upstream-decoder-test-source"
+                (pkgs.linkFarm "backend-es-upstream-decoder-test-layout" {
+                  "CoreFnJson.purs" = "${upstreamTestSource}/CoreFnJson.purs";
+                  "DecoderRunner.purs" = "${helperSource}/DecoderRunner.purs";
+                  "Utils.purs" = "${helperSource}/Utils.purs";
+                  "Utils.js" = "${helperSource}/Utils.js";
+                  "SnapshotPolicy.purs" = "${helperSource}/SnapshotPolicy.purs";
+                  "SnapshotRunner.purs" = "${helperSource}/SnapshotRunner.purs";
+                  Platform = "${helperSource}/Platform";
+                });
+              test = mkCheck "backend-es-upstream-corefn-int-literals"
+                (copyLayout "backend-es-upstream-corefn-int-literals-workspace"
+                  (pkgs.linkFarm "backend-es-upstream-corefn-int-literals-layout" (upstreamLayout // {
+                    output = build;
+                    "package.json" = "${configSource}/package.json";
+                    "backend-es/test" = testSource;
+                    "backend-es/spago.yaml" = pkgs.writeText "backend-es-upstream-corefn-int-literals-config.yaml"
+                      ((builtins.replaceStrings [ "main: Test.Main" ] [ "main: Test.DecoderRunner" ]
+                        (builtins.readFile ./backend-es/spago.yaml)) + "\n    execArgs: ${builtins.toJSON [ "corefn-int-literals" ]}\n");
+                  })))
+                "${lib.getExe' tools.nodejs "npm"} run test";
+            in
+            {
+              inherit build test upstreamSource upstreamTestSource configSource helperSource tools;
+            };
           formatSource = lib.fileset.toSource {
             root = ./.;
             fileset = lib.fileset.unions [
@@ -265,6 +336,7 @@
           };
         in
         {
+          inherit upstreamDecoderEvidence;
           packages = {
             inherit purs-backend-es;
             default = purs-backend-es;
@@ -314,6 +386,7 @@
         });
     in
     {
+      lib.upstreamDecoderEvidence = forAllSystems (system: perSystem.${system}.upstreamDecoderEvidence);
       packages = forAllSystems (system: perSystem.${system}.packages);
       checks = forAllSystems (system: perSystem.${system}.checks);
       devShells = forAllSystems (system: { default = perSystem.${system}.devShell; });
