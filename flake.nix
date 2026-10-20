@@ -198,12 +198,39 @@
                 builtins.pathExists (./backend-es/test-snapshots/snapshots-out + "/${selector}.js"));
             mkCheck "backend-es-snapshots-${selector}" (snapshotWorkspace selector [])
               "${lib.getExe' tools.nodejs "npm"} run test";
+          incrementalSource = lib.fileset.toSource {
+            root = ./backend-es/test;
+            fileset = lib.fileset.unions [
+              ./backend-es/test/Incremental.purs
+              ./backend-es/test/Utils.purs
+              ./backend-es/test/Utils.js
+              ./backend-es/test/SnapshotPolicy.purs
+              ./backend-es/test/SnapshotRunner.purs
+              ./backend-es/test/Platform/Node/SnapshotProcess.purs
+              ./backend-es/test/Platform/Node/SnapshotProcess.js
+            ];
+          };
+          mkIncrementalCheck = selector:
+            mkCheck "backend-es-${selector}"
+              (copyLayout "backend-es-${selector}-workspace"
+                (pkgs.linkFarm "backend-es-${selector}-layout" (checkLayout // {
+                  "backend-es/test" = incrementalSource;
+                  "backend-es/spago.yaml" = pkgs.writeText "backend-es-${selector}-config.yaml"
+                    ((builtins.replaceStrings [ "main: Test.Main" ] [ "main: Test.Incremental" ]
+                      (builtins.readFile ./backend-es/spago.yaml)) + "\n    execArgs: ${builtins.toJSON [ selector ]}\n");
+                })))
+              "${lib.getExe' tools.nodejs "npm"} run test";
+          implementationTests = pkgs.linkFarm "backend-es-test-implementation" {
+            incremental-clean-reuse = mkIncrementalCheck "incremental-clean-reuse";
+            incremental-on-prepare-module = mkIncrementalCheck "incremental-on-prepare-module";
+          };
           formatSource = lib.fileset.toSource {
             root = ./.;
             fileset = lib.fileset.unions [
               ./src
               ./backend-es/src
               ./backend-es/test/Main.purs
+              ./backend-es/test/Incremental.purs
               ./backend-es/test/Utils.purs
               ./backend-es/test/SnapshotPolicy.purs
               ./backend-es/test/SnapshotRunner.purs
@@ -216,6 +243,11 @@
           packages = {
             inherit purs-backend-es;
             default = purs-backend-es;
+            test-incremental-clean-reuse = mkIncrementalCheck "incremental-clean-reuse";
+            test-incremental-on-prepare-module = mkIncrementalCheck "incremental-on-prepare-module";
+            test-implementation = implementationTests;
+            test-snapshot-html = mkSnapshotCheck "Snapshot.Html";
+            test-snapshot-tco03 = mkSnapshotCheck "Snapshot.Tco03";
             test-snapshot-case-guarded = mkSnapshotCheck "Snapshot.CaseGuarded";
             test-snapshot-primop-number01 = mkSnapshotCheck "Snapshot.PrimOpNumber01";
             test-snapshot-string-literal01 = mkSnapshotCheck "Snapshot.StringLiteral01";
@@ -227,6 +259,7 @@
               "${lib.getExe' tools.nodejs "npm"} run test";
           };
           checks = {
+            test-implementation = implementationTests;
             build = mkCheck "backend-es-pedantic-build" checkWorkspace
               "${lib.getExe' tools.nodejs "npm"} run build -- --pedantic-packages";
             snapshots = mkSnapshotCheck "Snapshot.*";
