@@ -1,34 +1,34 @@
-const $gf$djf = ($gf$djf$b$copy, $gf$djf$a0$copy, $gf$djf$a1$copy) => {
-  let $gf$djf$b = $gf$djf$b$copy, $gf$djf$a0 = $gf$djf$a0$copy, $gf$djf$a1 = $gf$djf$a1$copy, $gf$djf$c = true, $gf$djf$r;
-  while ($gf$djf$c) {
-    if ($gf$djf$b === 0) {
-      const n = $gf$djf$a0;
-      $gf$djf$b = 2;
-      $gf$djf$a0 = n;
-      $gf$djf$a1 = n - 1 | 0;
+const $tco$gf$djf = ($tco$gf$djf$b$copy, $tco$gf$djf$a0$copy, $tco$gf$djf$a1$copy) => {
+  let $tco$gf$djf$b = $tco$gf$djf$b$copy, $tco$gf$djf$a0 = $tco$gf$djf$a0$copy, $tco$gf$djf$a1 = $tco$gf$djf$a1$copy, $tco$gf$djf$c = true, $tco$gf$djf$r;
+  while ($tco$gf$djf$c) {
+    if ($tco$gf$djf$b === 0) {
+      const n = $tco$gf$djf$a0;
+      $tco$gf$djf$b = 2;
+      $tco$gf$djf$a0 = n;
+      $tco$gf$djf$a1 = n - 1 | 0;
       continue;
     }
-    if ($gf$djf$b === 1) {
-      const n = $gf$djf$a0;
+    if ($tco$gf$djf$b === 1) {
+      const n = $tco$gf$djf$a0;
       if (n === 100) {
-        $gf$djf$b = 2;
-        $gf$djf$a0 = n;
-        $gf$djf$a1 = n - 1 | 0;
+        $tco$gf$djf$b = 2;
+        $tco$gf$djf$a0 = n;
+        $tco$gf$djf$a1 = n - 1 | 0;
         continue;
       }
-      $gf$djf$b = 1;
-      $gf$djf$a0 = n + 1 | 0;
+      $tco$gf$djf$b = 1;
+      $tco$gf$djf$a0 = n + 1 | 0;
       continue;
     }
-    if ($gf$djf$b === 2) {
-      const a = $gf$djf$a0, b = $gf$djf$a1;
-      $gf$djf$b = 1;
-      $gf$djf$a0 = a + b | 0;
+    if ($tco$gf$djf$b === 2) {
+      const a = $tco$gf$djf$a0, b = $tco$gf$djf$a1;
+      $tco$gf$djf$b = 1;
+      $tco$gf$djf$a0 = a + b | 0;
     }
   }
-  return $gf$djf$r;
+  return $tco$gf$djf$r;
 };
-const g = n => $gf$djf(0, n);
-const f$dj = n => $gf$djf(1, n);
-const f = a => b => $gf$djf(2, a, b);
+const g = n => $tco$gf$djf(0, n);
+const f$dj = n => $tco$gf$djf(1, n);
+const f = a => b => $tco$gf$djf(2, a, b);
 export {f, f$dj, g};
