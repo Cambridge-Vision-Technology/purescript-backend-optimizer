@@ -334,6 +334,14 @@
               ./.tidyrc.json
             ];
           };
+          workflowSource = lib.fileset.toSource {
+            root = ./.;
+            fileset = lib.fileset.unions [
+              ./.github/workflows/ci.yml
+              ./.github/workflows/maintenance.yml
+              ./.github/workflows/notify-on-publish.yml
+            ];
+          };
         in
         {
           inherit upstreamDecoderEvidence;
@@ -358,6 +366,13 @@
               "${lib.getExe' tools.nodejs "npm"} run test";
           };
           checks = {
+            actionlint = pkgs.stdenvNoCC.mkDerivation {
+              name = "backend-es-actionlint";
+              src = workflowSource;
+              buildPhase = ''
+                exec ${lib.getExe pkgs.actionlint} .github/workflows/ci.yml .github/workflows/maintenance.yml .github/workflows/notify-on-publish.yml > ${builtins.placeholder "out"}
+              '';
+            };
             test-implementation = implementationTests;
             build = mkCheck "backend-es-pedantic-build" checkWorkspace
               "${lib.getExe' tools.nodejs "npm"} run build -- --pedantic-packages";

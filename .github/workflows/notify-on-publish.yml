@@ -1,0 +1,17 @@
+name: Notify on publish
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  notify:
+    uses: Cambridge-Vision-Technology/maintenance/.github/workflows/notify-downstream.yml@2967b1b4bd52b65c4d1518dbde7ecd5d6dce6014
+    with:
+      source-repo: ${{ github.repository }}
+      head-commit-message: ${{ github.event.head_commit.message }}
+    secrets:
+      AUTO_UPDATE_APP_ID: ${{ secrets.AUTO_UPDATE_APP_ID }}
+      AUTO_UPDATE_APP_PRIVATE_KEY: ${{ secrets.AUTO_UPDATE_APP_PRIVATE_KEY }}

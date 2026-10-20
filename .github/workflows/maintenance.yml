@@ -1,0 +1,33 @@
+name: Maintenance
+
+on:
+  schedule:
+    - cron: '23 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+  security-events: write
+  actions: read
+
+jobs:
+  maintenance:
+    uses: Cambridge-Vision-Technology/maintenance/.github/workflows/workflow.yml@2967b1b4bd52b65c4d1518dbde7ecd5d6dce6014
+    with:
+      update-flake-lock: true
+      update-inputs-separately: false
+      auto-merge-flake-lock: false
+      auto-merge-npm-deps: false
+      update-npm-deps: false
+      dedup: false
+      scythe: false
+      drop: false
+      flake-checker: false
+      enable-security: false
+      enable-org-read-access: false
+    secrets:
+      MAINTENANCE_AGE_KEY: ${{ secrets.MAINTENANCE_AGE_KEY }}
+      AUTO_UPDATE_APP_ID: ${{ secrets.AUTO_UPDATE_APP_ID }}
+      AUTO_UPDATE_APP_PRIVATE_KEY: ${{ secrets.AUTO_UPDATE_APP_PRIVATE_KEY }}
