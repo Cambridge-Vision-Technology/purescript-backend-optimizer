@@ -117,7 +117,12 @@
             text = builtins.replaceStrings [ "#!/usr/bin/env node" ] [ "#!${lib.getExe tools.nodejs}" ]
               (builtins.readFile ./backend-es/index.js);
           };
-          checkLayout = {
+          spagoCache = "${pkgs.buildSpagoNodeJs { symlink = false; }}/spago-nodejs";
+          spagoCacheLayout = {
+            ".cache/spago-nodejs" = spagoCache;
+            "Library/Caches/spago-nodejs" = spagoCache;
+          };
+          checkLayout = spagoCacheLayout // {
             src = "${source}/src";
             output = "${runtime}/output";
             "spago.yaml" = "${source}/spago.yaml";
@@ -145,7 +150,7 @@
               pkgs.diffutils
             ];
             buildPhase = ''
-              exec ${command} > ${builtins.placeholder "out"}
+              exec ${lib.getExe' pkgs.coreutils "env"} HOME="$PWD" XDG_CACHE_HOME="$PWD/.cache" ${command} > ${builtins.placeholder "out"}
             '';
           };
           snapshotSource = lib.fileset.toSource {
@@ -305,7 +310,7 @@
                 });
               test = mkCheck "backend-es-upstream-corefn-int-literals"
                 (copyLayout "backend-es-upstream-corefn-int-literals-workspace"
-                  (pkgs.linkFarm "backend-es-upstream-corefn-int-literals-layout" (upstreamLayout // {
+                  (pkgs.linkFarm "backend-es-upstream-corefn-int-literals-layout" (upstreamLayout // spagoCacheLayout // {
                     output = build;
                     "package.json" = "${configSource}/package.json";
                     "backend-es/test" = testSource;
