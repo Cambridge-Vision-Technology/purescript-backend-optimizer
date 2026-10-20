@@ -1,0 +1,178 @@
+name: Diagnose Darwin workspace materialization
+
+on:
+  push:
+    branches: [dev-1073-diagnose-darwin-materialization]
+
+permissions:
+  contents: read
+
+jobs:
+  materialize:
+    runs-on: macos-15-intel
+    steps:
+      - name: Create scoped evidence directory
+        id: evidence
+        run: mkdir -p "${{ runner.temp }}/dev1073-darwin-diagnostic"
+
+      - name: Company Nix setup
+        id: setup
+        uses: Cambridge-Vision-Technology/ci/setup@aa5e3d4010883a2796cc1f32a826f2cad6c4e3ac
+        with:
+          enable-org-read-access: false
+          enable-ssh-agent: false
+          enable-lfs: false
+          checkout: true
+          fetch-depth: '0'
+
+      - name: Record source and exact immutable declaration
+        id: declaration
+        run: |
+          nix eval --impure --json --expr '
+            let
+              flake = builtins.getFlake (toString ./.);
+              target = flake.packages.x86_64-darwin.diagnose-darwin-workspace;
+            in
+            assert target.drvPath == "/nix/store/gxsnb1ijlh13ajc4daz1rgp6g9hg75vh-backend-es-check-workspace.drv";
+            assert target.outPath == "/nix/store/ikgclz97jpz52jy6fml1ivykv2kjnxdm-backend-es-check-workspace";
+            assert target.drvPath == flake.checks.x86_64-darwin.build.src.drvPath;
+            {
+              sourceRef = "${{ github.ref }}";
+              sourceSha = "${{ github.sha }}";
+              runId = "${{ github.run_id }}";
+              runAttempt = "${{ github.run_attempt }}";
+              setup = "Cambridge-Vision-Technology/ci/setup@aa5e3d4010883a2796cc1f32a826f2cad6c4e3ac";
+              target = "packages.x86_64-darwin.diagnose-darwin-workspace";
+              drv = target.drvPath;
+              out = target.outPath;
+              inherit (target) system builder args buildCommand;
+            }
+          ' > "${{ runner.temp }}/dev1073-darwin-diagnostic/declaration.json" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/declaration.stderr"
+
+      - name: Record checked-out commit
+        id: checkout_identity
+        continue-on-error: true
+        run: git rev-parse HEAD > "${{ runner.temp }}/dev1073-darwin-diagnostic/checkout-sha.txt" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/checkout-sha.stderr"
+
+      - name: Record Nix client version
+        id: nix_version
+        continue-on-error: true
+        run: nix --version > "${{ runner.temp }}/dev1073-darwin-diagnostic/nix-version.txt" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/nix-version.stderr"
+
+      - name: Snapshot Nix daemon PIDs before build, without arguments
+        id: daemon_before
+        continue-on-error: true
+        run: /usr/bin/pgrep -l -x nix-daemon > "${{ runner.temp }}/dev1073-darwin-diagnostic/daemon-before.txt" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/daemon-before.stderr"
+
+      - name: Snapshot exact declared Bash or cp PIDs before build, without arguments
+        id: builder_before
+        continue-on-error: true
+        run: /usr/bin/pgrep -f '^/nix/store/(6sfr9nl8la7j1311dg61wz9dk0q3gxgk-bash-5\.3p3/bin/bash|m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9\.8/bin/cp)( |$)' > "${{ runner.temp }}/dev1073-darwin-diagnostic/builder-before-pids.txt" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/builder-before-pids.stderr"
+
+      - name: Observe memory before build, no pressure or simulation flags
+        id: memory_before
+        continue-on-error: true
+        run: /usr/bin/memory_pressure > "${{ runner.temp }}/dev1073-darwin-diagnostic/memory-before.txt" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/memory-before.stderr"
+
+      - name: Open UTC execution window
+        id: window_start
+        if: ${{ !cancelled() && steps.declaration.outcome == 'success' }}
+        run: /bin/date -u '+start=%Y-%m-%d %H:%M:%S%z' >> "$GITHUB_OUTPUT"
+
+      - name: Build only the exact workspace, timing the Nix client, not daemon builders
+        id: build
+        if: ${{ !cancelled() && steps.window_start.outcome == 'success' }}
+        run: /usr/bin/time -l -o "${{ runner.temp }}/dev1073-darwin-diagnostic/nix-client-time-rusage.txt" nix build --no-link --print-out-paths --print-build-logs --log-format raw .#packages.x86_64-darwin.diagnose-darwin-workspace > "${{ runner.temp }}/dev1073-darwin-diagnostic/build.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/build.stderr"
+
+      - name: Close UTC execution window even after build failure
+        id: window_end
+        if: ${{ always() && steps.window_start.outcome == 'success' }}
+        run: /bin/date -u -v+1S '+end=%Y-%m-%d %H:%M:%S%z' >> "$GITHUB_OUTPUT"
+
+      - name: Snapshot Nix daemon PIDs after build, without arguments
+        id: daemon_after
+        if: ${{ always() && steps.window_end.outcome == 'success' }}
+        continue-on-error: true
+        run: /usr/bin/pgrep -l -x nix-daemon > "${{ runner.temp }}/dev1073-darwin-diagnostic/daemon-after.txt" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/daemon-after.stderr"
+
+      - name: Snapshot exact declared Bash or cp PIDs after build, without arguments
+        id: builder_after
+        if: ${{ always() && steps.window_end.outcome == 'success' }}
+        continue-on-error: true
+        run: /usr/bin/pgrep -f '^/nix/store/(6sfr9nl8la7j1311dg61wz9dk0q3gxgk-bash-5\.3p3/bin/bash|m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9\.8/bin/cp)( |$)' > "${{ runner.temp }}/dev1073-darwin-diagnostic/builder-after-pids.txt" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/builder-after-pids.stderr"
+
+      - name: Observe memory after build, no pressure or simulation flags
+        id: memory_after
+        if: ${{ always() && steps.window_end.outcome == 'success' }}
+        continue-on-error: true
+        run: /usr/bin/memory_pressure > "${{ runner.temp }}/dev1073-darwin-diagnostic/memory-after.txt" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/memory-after.stderr"
+
+      - name: Read target-related termination and security records in the UTC window
+        id: termination_log
+        if: ${{ always() && steps.window_start.outcome == 'success' && steps.window_end.outcome == 'success' }}
+        continue-on-error: true
+        run: >-
+          /usr/bin/log show --style json --timezone UTC --info --debug
+          --start '${{ steps.window_start.outputs.start }}' --end '${{ steps.window_end.outputs.end }}'
+          --predicate '(process IN {"kernel", "amfid", "syspolicyd", "taskgated", "taskgated-helper"}) AND (eventMessage CONTAINS[c] "nix-daemon" OR eventMessage CONTAINS[c] "(cp)" OR eventMessage CONTAINS[c] "(bash)" OR eventMessage CONTAINS[c] "/m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9.8/bin/cp" OR eventMessage CONTAINS[c] "/6sfr9nl8la7j1311dg61wz9dk0q3gxgk-bash-5.3p3/bin/bash" OR eventMessage CONTAINS[c] "gxsnb1ijlh13ajc4daz1rgp6g9hg75vh" OR eventMessage CONTAINS[c] "ikgclz97jpz52jy6fml1ivykv2kjnxdm")'
+          > "${{ runner.temp }}/dev1073-darwin-diagnostic/termination-security.json"
+          2> "${{ runner.temp }}/dev1073-darwin-diagnostic/termination-security.stderr"
+
+      - name: Read kernel memory-pressure records in the UTC window, not a target peak measurement
+        id: pressure_log
+        if: ${{ always() && steps.window_start.outcome == 'success' && steps.window_end.outcome == 'success' }}
+        continue-on-error: true
+        run: >-
+          /usr/bin/log show --style json --timezone UTC --info --debug
+          --start '${{ steps.window_start.outputs.start }}' --end '${{ steps.window_end.outputs.end }}'
+          --predicate 'process == "kernel" AND (eventMessage CONTAINS[c] "memorystatus" OR eventMessage CONTAINS[c] "memory pressure" OR eventMessage CONTAINS[c] "jetsam")'
+          > "${{ runner.temp }}/dev1073-darwin-diagnostic/kernel-memory-pressure.json"
+          2> "${{ runner.temp }}/dev1073-darwin-diagnostic/kernel-memory-pressure.stderr"
+
+      - name: Retrieve only the exact target Nix build log, including a failed build
+        id: target_log
+        if: ${{ always() && steps.build.outcome != 'skipped' && steps.setup.outcome == 'success' }}
+        continue-on-error: true
+        run: nix log /nix/store/gxsnb1ijlh13ajc4daz1rgp6g9hg75vh-backend-es-check-workspace.drv > "${{ runner.temp }}/dev1073-darwin-diagnostic/target-build.log" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/target-build-log.stderr"
+
+      - name: Retain build and collector outcomes and measurement limits
+        if: ${{ always() && steps.evidence.outcome == 'success' && steps.setup.outcome == 'success' }}
+        run: |
+          nix eval --json --expr '{
+            setup = "${{ steps.setup.outcome }}";
+            declaration = "${{ steps.declaration.outcome }}";
+            checkoutIdentity = "${{ steps.checkout_identity.outcome }}";
+            nixVersion = "${{ steps.nix_version.outcome }}";
+            build = "${{ steps.build.outcome }}";
+            windowStart = "${{ steps.window_start.outputs.start }}";
+            windowStartOutcome = "${{ steps.window_start.outcome }}";
+            windowEnd = "${{ steps.window_end.outputs.end }}";
+            windowEndOutcome = "${{ steps.window_end.outcome }}";
+            daemonBefore = "${{ steps.daemon_before.outcome }}";
+            daemonAfter = "${{ steps.daemon_after.outcome }}";
+            builderBefore = "${{ steps.builder_before.outcome }}";
+            builderAfter = "${{ steps.builder_after.outcome }}";
+            memoryBefore = "${{ steps.memory_before.outcome }}";
+            memoryAfter = "${{ steps.memory_after.outcome }}";
+            terminationSecurityLog = "${{ steps.termination_log.outcome }}";
+            kernelMemoryPressureLog = "${{ steps.pressure_log.outcome }}";
+            targetBuildLog = "${{ steps.target_log.outcome }}";
+            limits = [
+              "time rusage covers the Nix client and its waited children, not Nix-daemon builders or cp peak RSS; wall time includes evaluation, transfers and dependency work"
+              "UTC log start is rounded down to a second and end is advanced one second before rounding to cover execution; records can include other matching host activity in that window"
+              "PID snapshots are not an execution trace and cannot identify a dead builder or prove which executable received a signal"
+              "pgrep status 1 means no matching live PID; other failures, missing tools, permissions and empty logs are unavailable evidence, not causes"
+              "memory snapshots and kernel records describe the host, not a target process peak or proof of OOM"
+              "default Nix substitution is preserved; a reused target is not a fresh materialization execution"
+              "setup or host loss can prevent final collectors or upload; GitHub step outcomes and exit codes remain separate evidence"
+            ];
+          }' > "${{ runner.temp }}/dev1073-darwin-diagnostic/outcomes-and-limits.json" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/outcomes-and-limits.stderr"
+
+      - name: Upload only scoped diagnostic files, including failures
+        if: ${{ always() && steps.evidence.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dev1073-darwin-workspace-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/dev1073-darwin-diagnostic/
+          if-no-files-found: error
+          retention-days: 7
