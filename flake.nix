@@ -223,7 +223,30 @@
           implementationTests = pkgs.linkFarm "backend-es-test-implementation" {
             incremental-clean-reuse = mkIncrementalCheck "incremental-clean-reuse";
             incremental-on-prepare-module = mkIncrementalCheck "incremental-on-prepare-module";
+            corefn-int-literals = decoderCheck;
           };
+          decoderSource = lib.fileset.toSource {
+            root = ./backend-es/test;
+            fileset = lib.fileset.unions [
+              ./backend-es/test/CoreFnJson.purs
+              ./backend-es/test/DecoderRunner.purs
+              ./backend-es/test/Utils.purs
+              ./backend-es/test/Utils.js
+              ./backend-es/test/SnapshotPolicy.purs
+              ./backend-es/test/SnapshotRunner.purs
+              ./backend-es/test/Platform/Node/SnapshotProcess.purs
+              ./backend-es/test/Platform/Node/SnapshotProcess.js
+            ];
+          };
+          decoderCheck = mkCheck "backend-es-corefn-int-literals"
+            (copyLayout "backend-es-corefn-int-literals-workspace"
+              (pkgs.linkFarm "backend-es-corefn-int-literals-layout" (checkLayout // {
+                "backend-es/test" = decoderSource;
+                "backend-es/spago.yaml" = pkgs.writeText "backend-es-corefn-int-literals-config.yaml"
+                  ((builtins.replaceStrings [ "main: Test.Main" ] [ "main: Test.DecoderRunner" ]
+                    (builtins.readFile ./backend-es/spago.yaml)) + "\n    execArgs: ${builtins.toJSON [ "corefn-int-literals" ]}\n");
+              })))
+            "${lib.getExe' tools.nodejs "npm"} run test";
           formatSource = lib.fileset.toSource {
             root = ./.;
             fileset = lib.fileset.unions [
@@ -231,6 +254,8 @@
               ./backend-es/src
               ./backend-es/test/Main.purs
               ./backend-es/test/Incremental.purs
+              ./backend-es/test/CoreFnJson.purs
+              ./backend-es/test/DecoderRunner.purs
               ./backend-es/test/Utils.purs
               ./backend-es/test/SnapshotPolicy.purs
               ./backend-es/test/SnapshotRunner.purs
@@ -246,6 +271,7 @@
             test-incremental-clean-reuse = mkIncrementalCheck "incremental-clean-reuse";
             test-incremental-on-prepare-module = mkIncrementalCheck "incremental-on-prepare-module";
             test-implementation = implementationTests;
+            test-corefn-int-literals = decoderCheck;
             test-snapshot-html = mkSnapshotCheck "Snapshot.Html";
             test-snapshot-tco03 = mkSnapshotCheck "Snapshot.Tco03";
             test-snapshot-case-guarded = mkSnapshotCheck "Snapshot.CaseGuarded";
