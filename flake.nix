@@ -346,6 +346,7 @@
             test-corefn-int-literals = decoderCheck;
             test-snapshot-html = mkSnapshotCheck "Snapshot.Html";
             test-snapshot-tco03 = mkSnapshotCheck "Snapshot.Tco03";
+            test-snapshot-tco07 = mkSnapshotCheck "Snapshot.Tco07";
             test-snapshot-case-guarded = mkSnapshotCheck "Snapshot.CaseGuarded";
             test-snapshot-primop-number01 = mkSnapshotCheck "Snapshot.PrimOpNumber01";
             test-snapshot-string-literal01 = mkSnapshotCheck "Snapshot.StringLiteral01";
