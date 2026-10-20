@@ -1,47 +1,22 @@
+name: CI
+
 on:
+  pull_request:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
-  build:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macOS-latest] # windows disabled for unknown spago reasons
-    runs-on: ${{ matrix.os }}
-
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: 'npm'
-
-      - name: Cache PureScript dependencies
-        uses: actions/cache@v4
-        with:
-          key: ${{ runner.os }}-spago-${{ hashFiles('**/spago.lock') }}
-          path: |
-            .spago
-            output
-
-      - name: Install npm dependencies
-        run: npm install --include=dev
-
-      - name: Install dependencies
-        run: npm run install
-
-      - name: Build project
-        run: npm run build -- --pedantic-packages
-
-      - name: Run snapshots
-        run: npm run test
-
-      - name: Test output-diff (Linux only)
-        if: matrix.os == 'ubuntu-latest'
-        run: cd backend-es && npm run test:output-diff
-
-      - name: Check formatting (Linux only)
-        if: matrix.os == 'ubuntu-latest'
-        run: npm run format:check
+  ci:
+    uses: Cambridge-Vision-Technology/ci/.github/workflows/workflow.yml@aa5e3d4010883a2796cc1f32a826f2cad6c4e3ac
+    with:
+      enable-org-read-access: false
+      check-dev-shells: true
