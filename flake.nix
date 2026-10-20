@@ -105,6 +105,10 @@
               ./backend-es/test/Main.purs
               ./backend-es/test/Utils.purs
               ./backend-es/test/Utils.js
+              ./backend-es/test/SnapshotPolicy.purs
+              ./backend-es/test/SnapshotRunner.purs
+              ./backend-es/test/Platform/Node/SnapshotProcess.purs
+              ./backend-es/test/Platform/Node/SnapshotProcess.js
             ];
           };
           bundledLauncher = pkgs.writeTextFile {
@@ -182,17 +186,17 @@
             "backend-es/test-snapshots/output" = snapshotCompiled;
             "backend-es/test-snapshots/.spago" = "${snapshotDependencies}/.spago";
           };
-          snapshotWorkspace = selector:
+          snapshotWorkspace = selector: extraArgs:
             copyLayout "backend-es-snapshot-workspace-${selector}"
               (pkgs.linkFarm "backend-es-snapshot-layout-${selector}" (snapshotLayout // {
                 "backend-es/spago.yaml" = pkgs.writeText "backend-es-snapshot-config-${selector}.yaml"
-                  ((builtins.readFile ./backend-es/spago.yaml) + "\n    execArgs: ${builtins.toJSON [ "--filter" selector ]}\n");
+                  ((builtins.readFile ./backend-es/spago.yaml) + "\n    execArgs: ${builtins.toJSON ([ "--filter" selector ] ++ extraArgs)}\n");
               }));
           mkSnapshotCheck = selector:
             assert selector == "Snapshot.*" ||
               (builtins.pathExists (./backend-es/test-snapshots/src + "/${selector}.purs") &&
                 builtins.pathExists (./backend-es/test-snapshots/snapshots-out + "/${selector}.js"));
-            mkCheck "backend-es-snapshots-${selector}" (snapshotWorkspace selector)
+            mkCheck "backend-es-snapshots-${selector}" (snapshotWorkspace selector [])
               "${lib.getExe' tools.nodejs "npm"} run test";
           formatSource = lib.fileset.toSource {
             root = ./.;
@@ -201,6 +205,9 @@
               ./backend-es/src
               ./backend-es/test/Main.purs
               ./backend-es/test/Utils.purs
+              ./backend-es/test/SnapshotPolicy.purs
+              ./backend-es/test/SnapshotRunner.purs
+              ./backend-es/test/Platform/Node/SnapshotProcess.purs
               ./.tidyrc.json
             ];
           };
@@ -212,6 +219,12 @@
             test-snapshot-case-guarded = mkSnapshotCheck "Snapshot.CaseGuarded";
             test-snapshot-primop-number01 = mkSnapshotCheck "Snapshot.PrimOpNumber01";
             test-snapshot-string-literal01 = mkSnapshotCheck "Snapshot.StringLiteral01";
+            test-snapshot-timeout-control = mkCheck "backend-es-snapshot-timeout-control"
+              (snapshotWorkspace "Snapshot.StringLiteral01" [ "--diagnostic-timeout" "--deadline-ms" "3000" ])
+              "${lib.getExe' tools.nodejs "npm"} run test";
+            test-snapshot-empty-selection-control = mkCheck "backend-es-snapshot-empty-selection-control"
+              (snapshotWorkspace "Snapshot.__DEV1073NonexistentSnapshot__" [])
+              "${lib.getExe' tools.nodejs "npm"} run test";
           };
           checks = {
             build = mkCheck "backend-es-pedantic-build" checkWorkspace
@@ -223,7 +236,7 @@
               name = "backend-es-format";
               src = formatSource;
               buildPhase = ''
-                exec ${lib.getExe tools.purs-tidy} check src backend-es/src backend-es/test/*.purs > ${builtins.placeholder "out"}
+                exec ${lib.getExe tools.purs-tidy} check src backend-es/src backend-es/test > ${builtins.placeholder "out"}
               '';
             };
           };
