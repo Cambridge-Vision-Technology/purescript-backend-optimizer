@@ -3,6 +3,7 @@ package:
   dependencies:
     - argonaut: ">=9.0.0 <10.0.0"
     - arrays: ">=7.3.0 <8.0.0"
+    - bifunctors: ">=6.1.0 <7.0.0"
     - control: ">=6.0.0 <7.0.0"
     - debug: ">=6.0.2 <7.0.0"
     - dodo-printer: ">=2.2.3 <3.0.0"
