@@ -191,6 +191,24 @@ jobs:
         continue-on-error: true
         run: /usr/bin/codesign --display --verbose=4 /nix/store/m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9.8/bin/coreutils > "${{ runner.temp }}/dev1073-darwin-diagnostic/coreutils-signature.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/coreutils-signature.stderr"
 
+      - name: Verify exact Bash code signature without modifying it
+        id: bash_verification
+        if: ${{ always() && steps.probe_start.outcome == 'success' }}
+        continue-on-error: true
+        run: /usr/bin/codesign --verify --verbose=4 /nix/store/6sfr9nl8la7j1311dg61wz9dk0q3gxgk-bash-5.3p3/bin/bash > "${{ runner.temp }}/dev1073-darwin-diagnostic/bash-verification.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/bash-verification.stderr"
+
+      - name: Verify exact cp alias code signature without modifying it
+        id: cp_verification
+        if: ${{ always() && steps.probe_start.outcome == 'success' }}
+        continue-on-error: true
+        run: /usr/bin/codesign --verify --verbose=4 /nix/store/m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9.8/bin/cp > "${{ runner.temp }}/dev1073-darwin-diagnostic/cp-verification.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/cp-verification.stderr"
+
+      - name: Verify exact Coreutils image code signature without modifying it
+        id: coreutils_verification
+        if: ${{ always() && steps.probe_start.outcome == 'success' }}
+        continue-on-error: true
+        run: /usr/bin/codesign --verify --verbose=4 /nix/store/m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9.8/bin/coreutils > "${{ runner.temp }}/dev1073-darwin-diagnostic/coreutils-verification.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/coreutils-verification.stderr"
+
       - name: Probe exact Bash version, not a copy execution
         id: bash_version
         if: ${{ always() && steps.probe_start.outcome == 'success' }}
@@ -275,6 +293,9 @@ jobs:
             bashSignature = "${{ steps.bash_signature.outcome }}";
             cpSignature = "${{ steps.cp_signature.outcome }}";
             coreutilsSignature = "${{ steps.coreutils_signature.outcome }}";
+            bashVerification = "${{ steps.bash_verification.outcome }}";
+            cpVerification = "${{ steps.cp_verification.outcome }}";
+            coreutilsVerification = "${{ steps.coreutils_verification.outcome }}";
             bashVersion = "${{ steps.bash_version.outcome }}";
             cpVersion = "${{ steps.cp_version.outcome }}";
             coreutilsVersion = "${{ steps.coreutils_version.outcome }}";
