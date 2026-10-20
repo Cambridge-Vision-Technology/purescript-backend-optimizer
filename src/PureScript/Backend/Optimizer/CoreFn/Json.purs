@@ -2,6 +2,9 @@
 module PureScript.Backend.Optimizer.CoreFn.Json
   ( decodeModule
   , decodeModule'
+  , Target(..)
+  , decodeModuleWithTarget
+  , decodeModuleWithTarget'
   , decodeAnn
   ) where
 
@@ -26,6 +29,7 @@ import Data.Tuple (Tuple(..))
 import Foreign.Object (Object)
 import Foreign.Object as Object
 import Partial.Unsafe (unsafePartial)
+import Platform.JavaScript.CoreFnInt as Platform.JavaScript.CoreFnInt
 import Prelude as Prelude
 import PureScript.Backend.Optimizer.CoreFn (Ann(..), Bind(..), Binder(..), Binding(..), CaseAlternative(..), CaseGuard(..), Comment(..), ConstructorType(..), Expr(..), Guard(..), Ident(..), Import(..), Literal(..), Meta(..), Module(..), ModuleName(..), Prop(..), ProperName(..), Qualified(..), ReExport(..), SourcePos, SourceSpan, emptySpan)
 import Safe.Coerce (coerce)
@@ -125,8 +129,16 @@ decodeImport decodeAnn' json = do
 decodeModule :: Json -> JsonDecode (Module Ann)
 decodeModule = decodeModule' decodeAnn
 
+data Target = JavaScript | Erlang
+
+decodeModuleWithTarget :: Target -> Json -> JsonDecode (Module Ann)
+decodeModuleWithTarget target = decodeModuleWithTarget' target decodeAnn
+
 decodeModule' :: forall a. (String -> Json -> JsonDecode a) -> Json -> JsonDecode (Module a)
-decodeModule' decodeAnn' json = do
+decodeModule' = decodeModuleWithTarget' JavaScript
+
+decodeModuleWithTarget' :: forall a. Target -> (String -> Json -> JsonDecode a) -> Json -> JsonDecode (Module a)
+decodeModuleWithTarget' target decodeAnn' json = do
   obj <- decodeJObject json
   name <- getField decodeModuleName obj "moduleName"
   path <- getField decodeString obj "modulePath"
@@ -134,7 +146,7 @@ decodeModule' decodeAnn' json = do
   imports <- getField (decodeArray (decodeImport (decodeAnn' path))) obj "imports"
   exports <- getField (decodeArray decodeIdent) obj "exports"
   reExports <- getField decodeReExports obj "reExports"
-  decls <- getField (decodeArray (decodeBind (decodeAnn' path))) obj "decls"
+  decls <- getField (decodeArray (decodeBind (decodeLiteralInt target name) (decodeAnn' path))) obj "decls"
   foreign_ <- getField (decodeArray decodeIdent) obj "foreign"
   comments <- getField (decodeArray decodeComment) obj "comments"
   pure $ Module
@@ -155,24 +167,24 @@ decodeReExports json = do
   all <- traverse (traverse (decodeArray decodeIdent)) $ Object.toArrayWithKey Tuple obj
   pure $ all >>= \(Tuple mn idents) -> ReExport (ModuleName mn) <$> idents
 
-decodeBind :: forall a. (Json -> JsonDecode a) -> Json -> JsonDecode (Bind a)
-decodeBind decAnn json = do
+decodeBind :: forall a. (Json -> JsonDecode Int) -> (Json -> JsonDecode a) -> Json -> JsonDecode (Bind a)
+decodeBind decInt decAnn json = do
   obj <- decodeJObject json
   typ <- getField decodeString obj "bindType"
   case typ of
-    "NonRec" -> NonRec <$> decodeBinding decAnn obj
-    "Rec" -> Rec <$> getField (decodeArray (decodeJObject >=> decodeBinding decAnn)) obj "binds"
+    "NonRec" -> NonRec <$> decodeBinding decInt decAnn obj
+    "Rec" -> Rec <$> getField (decodeArray (decodeJObject >=> decodeBinding decInt decAnn)) obj "binds"
     _ -> throwError $ TypeMismatch "Bind"
 
-decodeBinding :: forall a. (Json -> JsonDecode a) -> Object Json -> JsonDecode (Binding a)
-decodeBinding decAnn obj = do
+decodeBinding :: forall a. (Json -> JsonDecode Int) -> (Json -> JsonDecode a) -> Object Json -> JsonDecode (Binding a)
+decodeBinding decInt decAnn obj = do
   ann <- getField decAnn obj "annotation"
   ident <- getField decodeIdent obj "identifier"
-  expr <- getField (decodeExpr decAnn) obj "expression"
+  expr <- getField (decodeExpr decInt decAnn) obj "expression"
   pure $ Binding ann ident expr
 
-decodeExpr :: forall a. (Json -> JsonDecode a) -> Json -> JsonDecode (Expr a)
-decodeExpr decAnn json = do
+decodeExpr :: forall a. (Json -> JsonDecode Int) -> (Json -> JsonDecode a) -> Json -> JsonDecode (Expr a)
+decodeExpr decInt decAnn json = do
   obj <- decodeJObject json
   ann <- getField decAnn obj "annotation"
   typ <- getField decodeString obj "type"
@@ -180,60 +192,60 @@ decodeExpr decAnn json = do
     "Var" ->
       ExprVar ann <$> getField (decodeQualified decodeIdent) obj "value"
     "Literal" ->
-      ExprLit ann <$> getField (decodeLiteral (decodeExpr decAnn)) obj "value"
+      ExprLit ann <$> getField (decodeLiteral decInt (decodeExpr decInt decAnn)) obj "value"
     "Constructor" -> do
       tyn <- getField decodeProperName obj "typeName"
       con <- getField decodeIdent obj "constructorName"
       is <- getField (decodeArray decodeString) obj "fieldNames"
       pure $ ExprConstructor ann tyn con is
     "Accessor" -> do
-      e <- getField (decodeExpr decAnn) obj "expression"
+      e <- getField (decodeExpr decInt decAnn) obj "expression"
       f <- getField decodeString obj "fieldName"
       pure $ ExprAccessor ann e f
     "ObjectUpdate" -> do
-      e <- getField (decodeExpr decAnn) obj "expression"
-      us <- getField (decodeRecord (decodeExpr decAnn)) obj "updates"
+      e <- getField (decodeExpr decInt decAnn) obj "expression"
+      us <- getField (decodeRecord (decodeExpr decInt decAnn)) obj "updates"
       pure $ ExprUpdate ann e us
     "Abs" -> do
       idn <- getField decodeIdent obj "argument"
-      e <- getField (decodeExpr decAnn) obj "body"
+      e <- getField (decodeExpr decInt decAnn) obj "body"
       pure $ ExprAbs ann idn e
     "App" -> do
-      e1 <- getField (decodeExpr decAnn) obj "abstraction"
-      e2 <- getField (decodeExpr decAnn) obj "argument"
+      e1 <- getField (decodeExpr decInt decAnn) obj "abstraction"
+      e2 <- getField (decodeExpr decInt decAnn) obj "argument"
       pure $ ExprApp ann e1 e2
     "Case" -> do
-      cs <- getField (decodeArray (decodeExpr decAnn)) obj "caseExpressions"
-      cas <- getField (decodeArray (decodeCaseAlternative decAnn)) obj "caseAlternatives"
+      cs <- getField (decodeArray (decodeExpr decInt decAnn)) obj "caseExpressions"
+      cas <- getField (decodeArray (decodeCaseAlternative decInt decAnn)) obj "caseAlternatives"
       pure $ ExprCase ann cs cas
     "Let" -> do
-      bs <- getField (decodeArray (decodeBind decAnn)) obj "binds"
-      e <- getField (decodeExpr decAnn) obj "expression"
+      bs <- getField (decodeArray (decodeBind decInt decAnn)) obj "binds"
+      e <- getField (decodeExpr decInt decAnn) obj "expression"
       pure $ ExprLet ann bs e
     _ ->
       throwError $ TypeMismatch "Expr"
 
-decodeCaseAlternative :: forall a. (Json -> JsonDecode a) -> Json -> JsonDecode (CaseAlternative a)
-decodeCaseAlternative decAnn json = do
+decodeCaseAlternative :: forall a. (Json -> JsonDecode Int) -> (Json -> JsonDecode a) -> Json -> JsonDecode (CaseAlternative a)
+decodeCaseAlternative decInt decAnn json = do
   obj <- decodeJObject json
-  binders <- getField (decodeArray (decodeBinder decAnn)) obj "binders"
+  binders <- getField (decodeArray (decodeBinder decInt decAnn)) obj "binders"
   isGuarded <- getField decodeBoolean obj "isGuarded"
   if isGuarded then do
-    es <- getField (decodeArray (decodeGuard decAnn)) obj "expressions"
+    es <- getField (decodeArray (decodeGuard decInt decAnn)) obj "expressions"
     pure $ CaseAlternative binders (Guarded es)
   else do
-    e <- getField (decodeExpr decAnn) obj "expression"
+    e <- getField (decodeExpr decInt decAnn) obj "expression"
     pure $ CaseAlternative binders (Unconditional e)
 
-decodeGuard :: forall a. (Json -> JsonDecode a) -> Json -> JsonDecode (Guard a)
-decodeGuard decAnn json = do
+decodeGuard :: forall a. (Json -> JsonDecode Int) -> (Json -> JsonDecode a) -> Json -> JsonDecode (Guard a)
+decodeGuard decInt decAnn json = do
   obj <- decodeJObject json
-  guard <- getField (decodeExpr decAnn) obj "guard"
-  expr <- getField (decodeExpr decAnn) obj "expression"
+  guard <- getField (decodeExpr decInt decAnn) obj "guard"
+  expr <- getField (decodeExpr decInt decAnn) obj "expression"
   pure $ Guard guard expr
 
-decodeBinder :: forall a. (Json -> JsonDecode a) -> Json -> JsonDecode (Binder a)
-decodeBinder decAnn json = do
+decodeBinder :: forall a. (Json -> JsonDecode Int) -> (Json -> JsonDecode a) -> Json -> JsonDecode (Binder a)
+decodeBinder decInt decAnn json = do
   obj <- decodeJObject json
   ann <- getField decAnn obj "annotation"
   typ <- getField decodeString obj "binderType"
@@ -243,26 +255,26 @@ decodeBinder decAnn json = do
     "VarBinder" ->
       BinderVar ann <$> getField decodeIdent obj "identifier"
     "LiteralBinder" ->
-      BinderLit ann <$> getField (decodeLiteral (decodeBinder decAnn)) obj "literal"
+      BinderLit ann <$> getField (decodeLiteral decInt (decodeBinder decInt decAnn)) obj "literal"
     "ConstructorBinder" -> do
       tyn <- getField (decodeQualified decodeProperName) obj "typeName"
       ctn <- getField (decodeQualified decodeIdent) obj "constructorName"
-      binders <- getField (decodeArray (decodeBinder decAnn)) obj "binders"
+      binders <- getField (decodeArray (decodeBinder decInt decAnn)) obj "binders"
       pure $ BinderConstructor ann tyn ctn binders
     "NamedBinder" -> do
       ident <- getField decodeIdent obj "identifier"
-      binder <- getField (decodeBinder decAnn) obj "binder"
+      binder <- getField (decodeBinder decInt decAnn) obj "binder"
       pure $ BinderNamed ann ident binder
     _ ->
       throwError $ TypeMismatch "Binder"
 
-decodeLiteral :: forall a. (Json -> JsonDecode a) -> Json -> JsonDecode (Literal a)
-decodeLiteral dec json = do
+decodeLiteral :: forall a. (Json -> JsonDecode Int) -> (Json -> JsonDecode a) -> Json -> JsonDecode (Literal a)
+decodeLiteral decInt dec json = do
   obj <- decodeJObject json
   typ <- getField decodeString obj "literalType"
   case typ of
     "IntLiteral" ->
-      LitInt <$> getField decodeInt obj "value"
+      LitInt <$> getField decInt obj "value"
     "NumberLiteral" ->
       LitNumber <$> getField decodeNumber obj "value"
     "StringLiteral" ->
@@ -396,3 +408,12 @@ decodeInt json = do
       Left $ TypeMismatch "Int"
     Just int ->
       Right int
+
+decodeLiteralInt :: Target -> ModuleName -> Json -> JsonDecode Int
+decodeLiteralInt JavaScript _ = decodeInt
+decodeLiteralInt Erlang (ModuleName name) = \json -> do
+  num <- decodeNumber json
+  if num >= -9007199254740991.0 && num <= 9007199254740991.0 && Platform.JavaScript.CoreFnInt.isIntegerImpl num then
+    Right (Platform.JavaScript.CoreFnInt.fromNumberImpl num)
+  else
+    Left $ TypeMismatch ("IntLiteral in module " <> name <> ": expected an integer within [-9007199254740991, 9007199254740991], received " <> show num)
