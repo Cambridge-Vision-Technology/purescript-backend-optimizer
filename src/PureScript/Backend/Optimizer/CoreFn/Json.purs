@@ -16,9 +16,9 @@ import Data.Array as Array
 import Data.Array.ST as STArray
 import Data.Either (Either(..), note)
 import Data.Enum (toEnum)
-import Data.Foldable (intercalate)
 import Data.Int as Int
 import Data.Maybe (Maybe(..))
+import Data.String (joinWith)
 import Data.String.CodePoints (CodePoint, fromCodePointArray)
 import Data.String.CodeUnits as SCU
 import Data.Traversable (traverse)
@@ -76,7 +76,7 @@ decodeProperName :: Json -> JsonDecode ProperName
 decodeProperName = coerce decodeString
 
 decodeModuleName :: Json -> JsonDecode ModuleName
-decodeModuleName = map (ModuleName <<< intercalate ".") <<< decodeArray decodeString
+decodeModuleName = map (ModuleName <<< joinWith ".") <<< decodeArray decodeString
 
 decodeQualified :: forall a. (Json -> JsonDecode a) -> Json -> JsonDecode (Qualified a)
 decodeQualified k json = do

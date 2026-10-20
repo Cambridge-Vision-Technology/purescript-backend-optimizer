@@ -189,8 +189,9 @@ runSnapshotTests { accept, filter, traceIdents } = do
       let { directives } = parseDirectiveFile defaultDirectives
       copyFile (Path.concat [ "..", "runtime.js" ]) (Path.concat [ testOut, "runtime.js" ])
       stepsRef <- liftEffect $ Ref.new []
-      coreFnModules # buildModules
+      _ <- coreFnModules # buildModules
         { directives
+        , incremental: Nothing
         , analyzeCustom: \_ _ -> Nothing
         , foreignSemantics: Map.union coreForeignSemantics esForeignSemantics
         , onCodegenModule: \build (Module { name: ModuleName name, path }) backendMod optimizationSteps -> do

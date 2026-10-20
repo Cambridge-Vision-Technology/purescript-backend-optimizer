@@ -14,13 +14,12 @@ import Data.Array as Array
 import Data.Either (Either(..))
 import Data.Foldable (foldl)
 import Data.FoldableWithIndex (foldlWithIndex)
-import Data.Map as Map
 import Data.Maybe (Maybe(..))
 import Data.String (Pattern(..))
 import Data.String as String
 import Data.Tuple (Tuple(..), fst)
 import PureScript.Backend.Optimizer.CoreFn (Comment(..), Ident(..), ModuleName(..), Qualified(..))
-import PureScript.Backend.Optimizer.Semantics (EvalRef(..), InlineAccessor(..), InlineDirective(..), InlineDirectiveMap, insertDirective)
+import PureScript.Backend.Optimizer.Semantics (EvalRef(..), InlineAccessor(..), InlineDirective(..), InlineDirectiveMap, insertDirective, noDirectives)
 import PureScript.CST.Errors (ParseError(..))
 import PureScript.CST.Lexer (lex)
 import PureScript.CST.Parser.Monad (Parser, PositionedError, eof, runParser, take)
@@ -33,7 +32,7 @@ type DirectiveFileResult =
   }
 
 parseDirectiveFile :: String -> DirectiveFileResult
-parseDirectiveFile = foldlWithIndex go { errors: [], directives: Map.empty } <<< String.split (Pattern "\n")
+parseDirectiveFile = foldlWithIndex go { errors: [], directives: noDirectives } <<< String.split (Pattern "\n")
   where
   go line { errors, directives } str = case parseDirectiveLine str of
     Left err ->
@@ -50,7 +49,7 @@ type DirectiveHeaderResult =
   }
 
 parseDirectiveHeader :: ModuleName -> Array Comment -> DirectiveHeaderResult
-parseDirectiveHeader moduleName = foldl go { errors: [], locals: Map.empty, exports: Map.empty }
+parseDirectiveHeader moduleName = foldl go { errors: [], locals: noDirectives, exports: noDirectives }
   where
   go { errors, locals, exports } = case _ of
     LineComment str

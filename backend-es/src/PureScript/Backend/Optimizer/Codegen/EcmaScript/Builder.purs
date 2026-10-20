@@ -15,7 +15,7 @@ import Data.Lazy as Lazy
 import Data.List (List)
 import Data.Map (Map)
 import Data.Map as Map
-import Data.Maybe (Maybe, maybe)
+import Data.Maybe (Maybe(..), maybe)
 import Data.Set (Set)
 import Data.Set as Set
 import Data.Set.NonEmpty as NonEmptySet
@@ -37,6 +37,7 @@ import PureScript.Backend.Optimizer.CoreFn.Sort (emptyPull, pullResult, resumePu
 import PureScript.Backend.Optimizer.Directives (parseDirectiveFile)
 import PureScript.Backend.Optimizer.Directives.Defaults as Defaults
 import PureScript.Backend.Optimizer.Semantics (BackendExpr, Ctx, InlineDirectiveMap)
+import PureScript.Backend.Optimizer.Semantics as Semantics
 import PureScript.Backend.Optimizer.Semantics.Foreign (ForeignEval)
 import PureScript.Backend.Optimizer.Syntax (BackendSyntax)
 import PureScript.CST.Errors (printParseError)
@@ -100,7 +101,7 @@ basicBuildMain options = do
       <$> parallel options.resolveCoreFnDirectory
       <*> parallel options.resolveExternalDirectives
   let defaultDirectives = (parseDirectiveFile Defaults.defaultDirectives).directives
-  let allDirectives = Map.union externalDirectives defaultDirectives
+  let allDirectives = Semantics.unionDirectives externalDirectives defaultDirectives
   coreFnModulesFromOutput coreFnDir (pure "**") >>= case _ of
     Left errors -> do
       for_ errors \(Tuple filePath err) -> do
@@ -108,12 +109,13 @@ basicBuildMain options = do
       liftEffect $ Process.exit' 1
     Right coreFnModules -> do
       options.onCodegenBefore
-      coreFnModules # buildModules
+      _ <- coreFnModules # buildModules
         { analyzeCustom: options.analyzeCustom
         , directives: allDirectives
         , foreignSemantics: options.foreignSemantics
         , onCodegenModule: options.onCodegenModule
         , onPrepareModule: \env mod -> Right <$> options.onPrepareModule env mod
         , traceIdents: options.traceIdents
+        , incremental: Nothing
         }
       options.onCodegenAfter
