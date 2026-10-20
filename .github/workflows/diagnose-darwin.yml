@@ -1,4 +1,4 @@
-name: Diagnose Darwin workspace materialization
+name: Diagnose Darwin runtime materialization
 
 on:
   push:
@@ -31,21 +31,26 @@ jobs:
           nix eval --impure --json --expr '
             let
               flake = builtins.getFlake (toString ./.);
-              target = flake.packages.x86_64-darwin.diagnose-darwin-workspace;
+              workspace = flake.packages.x86_64-darwin.diagnose-darwin-workspace;
+              target = flake.packages.x86_64-darwin.diagnose-darwin-runtime;
             in
-            assert target.drvPath == "/nix/store/gxsnb1ijlh13ajc4daz1rgp6g9hg75vh-backend-es-check-workspace.drv";
-            assert target.outPath == "/nix/store/ikgclz97jpz52jy6fml1ivykv2kjnxdm-backend-es-check-workspace";
-            assert target.drvPath == flake.checks.x86_64-darwin.build.src.drvPath;
+            assert workspace.drvPath == "/nix/store/gxsnb1ijlh13ajc4daz1rgp6g9hg75vh-backend-es-check-workspace.drv";
+            assert workspace.outPath == "/nix/store/ikgclz97jpz52jy6fml1ivykv2kjnxdm-backend-es-check-workspace";
+            assert workspace.drvPath == flake.checks.x86_64-darwin.build.src.drvPath;
+            assert target.drvPath == "/nix/store/63h620l1ix5lx3ijm77mpncd7m6v2f42-purs-backend-es-runtime-1.4.3.drv";
+            assert target.outPath == "/nix/store/msby1pbc9vxqhaa5v1x17dm4div23ijl-purs-backend-es-runtime-1.4.3";
+            assert target.drvPath == flake.packages.x86_64-darwin.purs-backend-es.runtime.drvPath;
             {
               sourceRef = "${{ github.ref }}";
               sourceSha = "${{ github.sha }}";
               runId = "${{ github.run_id }}";
               runAttempt = "${{ github.run_attempt }}";
               setup = "Cambridge-Vision-Technology/ci/setup@aa5e3d4010883a2796cc1f32a826f2cad6c4e3ac";
-              target = "packages.x86_64-darwin.diagnose-darwin-workspace";
+              target = "packages.x86_64-darwin.diagnose-darwin-runtime";
               drv = target.drvPath;
               out = target.outPath;
               inherit (target) system builder args buildCommand;
+              workspaceIdentity = { drv = workspace.drvPath; out = workspace.outPath; };
             }
           ' > "${{ runner.temp }}/dev1073-darwin-diagnostic/declaration.json" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/declaration.stderr"
 
@@ -59,53 +64,160 @@ jobs:
         continue-on-error: true
         run: nix --version > "${{ runner.temp }}/dev1073-darwin-diagnostic/nix-version.txt" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/nix-version.stderr"
 
-      - name: Snapshot Nix daemon PIDs before build, without arguments
-        id: daemon_before
-        continue-on-error: true
-        run: /usr/bin/pgrep -l -x nix-daemon > "${{ runner.temp }}/dev1073-darwin-diagnostic/daemon-before.txt" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/daemon-before.stderr"
-
-      - name: Snapshot exact declared Bash or cp PIDs before build, without arguments
-        id: builder_before
-        continue-on-error: true
-        run: /usr/bin/pgrep -f '^/nix/store/(6sfr9nl8la7j1311dg61wz9dk0q3gxgk-bash-5\.3p3/bin/bash|m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9\.8/bin/cp)( |$)' > "${{ runner.temp }}/dev1073-darwin-diagnostic/builder-before-pids.txt" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/builder-before-pids.stderr"
-
-      - name: Observe memory before build, no pressure or simulation flags
-        id: memory_before
-        continue-on-error: true
-        run: /usr/bin/memory_pressure > "${{ runner.temp }}/dev1073-darwin-diagnostic/memory-before.txt" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/memory-before.stderr"
-
-      - name: Open UTC execution window
+      - name: Open UTC scope before build and all native observations
         id: window_start
         if: ${{ !cancelled() && steps.declaration.outcome == 'success' }}
         run: /bin/date -u '+start=%Y-%m-%d %H:%M:%S%z' >> "$GITHUB_OUTPUT"
 
-      - name: Build only the exact workspace, timing the Nix client, not daemon builders
-        id: build
+      - name: Snapshot Nix daemon PIDs before build, without arguments
+        id: daemon_before
         if: ${{ !cancelled() && steps.window_start.outcome == 'success' }}
-        run: /usr/bin/time -l -o "${{ runner.temp }}/dev1073-darwin-diagnostic/nix-client-time-rusage.txt" nix build --no-link --print-out-paths --print-build-logs --log-format raw .#packages.x86_64-darwin.diagnose-darwin-workspace > "${{ runner.temp }}/dev1073-darwin-diagnostic/build.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/build.stderr"
+        continue-on-error: true
+        run: /usr/bin/pgrep -l -x nix-daemon > "${{ runner.temp }}/dev1073-darwin-diagnostic/daemon-before.txt" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/daemon-before.stderr"
 
-      - name: Close UTC execution window even after build failure
-        id: window_end
-        if: ${{ always() && steps.window_start.outcome == 'success' }}
-        run: /bin/date -u -v+1S '+end=%Y-%m-%d %H:%M:%S%z' >> "$GITHUB_OUTPUT"
+      - name: Snapshot exact Bash, cp or resolved Coreutils PIDs before build, without arguments
+        id: builder_before
+        if: ${{ !cancelled() && steps.window_start.outcome == 'success' }}
+        continue-on-error: true
+        run: /usr/bin/pgrep -f '^/nix/store/(6sfr9nl8la7j1311dg61wz9dk0q3gxgk-bash-5\.3p3/bin/bash|m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9\.8/bin/(cp|coreutils))( |$)' > "${{ runner.temp }}/dev1073-darwin-diagnostic/builder-before-pids.txt" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/builder-before-pids.stderr"
+
+      - name: Observe memory before build, no pressure or simulation flags
+        id: memory_before
+        if: ${{ !cancelled() && steps.window_start.outcome == 'success' }}
+        continue-on-error: true
+        run: /usr/bin/memory_pressure > "${{ runner.temp }}/dev1073-darwin-diagnostic/memory-before.txt" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/memory-before.stderr"
+
+      - name: Record build start, separate from native binary probes
+        id: build_start
+        if: ${{ !cancelled() && steps.window_start.outcome == 'success' }}
+        run: /bin/date -u '+start=%Y-%m-%d %H:%M:%S%z' >> "$GITHUB_OUTPUT"
+
+      - name: Build only the exact runtime, timing the Nix client, not daemon builders
+        id: build
+        if: ${{ !cancelled() && steps.window_start.outcome == 'success' && steps.build_start.outcome == 'success' }}
+        run: /usr/bin/time -l -o "${{ runner.temp }}/dev1073-darwin-diagnostic/nix-client-time-rusage.txt" nix build --no-link --print-out-paths --print-build-logs --log-format raw .#packages.x86_64-darwin.diagnose-darwin-runtime > "${{ runner.temp }}/dev1073-darwin-diagnostic/build.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/build.stderr"
+
+      - name: Record build end even after failure, before native binary probes
+        id: build_end
+        if: ${{ always() && steps.build.outcome != 'skipped' && steps.build_start.outcome == 'success' }}
+        run: /bin/date -u '+end=%Y-%m-%d %H:%M:%S%z' >> "$GITHUB_OUTPUT"
 
       - name: Snapshot Nix daemon PIDs after build, without arguments
         id: daemon_after
-        if: ${{ always() && steps.window_end.outcome == 'success' }}
+        if: ${{ always() && steps.build_end.outcome == 'success' }}
         continue-on-error: true
         run: /usr/bin/pgrep -l -x nix-daemon > "${{ runner.temp }}/dev1073-darwin-diagnostic/daemon-after.txt" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/daemon-after.stderr"
 
-      - name: Snapshot exact declared Bash or cp PIDs after build, without arguments
+      - name: Snapshot exact Bash, cp or resolved Coreutils PIDs after build, without arguments
         id: builder_after
-        if: ${{ always() && steps.window_end.outcome == 'success' }}
+        if: ${{ always() && steps.build_end.outcome == 'success' }}
         continue-on-error: true
-        run: /usr/bin/pgrep -f '^/nix/store/(6sfr9nl8la7j1311dg61wz9dk0q3gxgk-bash-5\.3p3/bin/bash|m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9\.8/bin/cp)( |$)' > "${{ runner.temp }}/dev1073-darwin-diagnostic/builder-after-pids.txt" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/builder-after-pids.stderr"
+        run: /usr/bin/pgrep -f '^/nix/store/(6sfr9nl8la7j1311dg61wz9dk0q3gxgk-bash-5\.3p3/bin/bash|m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9\.8/bin/(cp|coreutils))( |$)' > "${{ runner.temp }}/dev1073-darwin-diagnostic/builder-after-pids.txt" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/builder-after-pids.stderr"
 
       - name: Observe memory after build, no pressure or simulation flags
         id: memory_after
-        if: ${{ always() && steps.window_end.outcome == 'success' }}
+        if: ${{ always() && steps.build_end.outcome == 'success' }}
         continue-on-error: true
         run: /usr/bin/memory_pressure > "${{ runner.temp }}/dev1073-darwin-diagnostic/memory-after.txt" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/memory-after.stderr"
+
+      - name: Open native binary probe window after target attempt and dependency acquisition
+        id: probe_start
+        if: ${{ always() && steps.window_start.outcome == 'success' && steps.build.outcome != 'skipped' }}
+        run: /bin/date -u '+start=%Y-%m-%d %H:%M:%S%z' >> "$GITHUB_OUTPUT"
+
+      - name: Resolve exact declared Bash image
+        id: bash_resolved
+        if: ${{ always() && steps.probe_start.outcome == 'success' }}
+        continue-on-error: true
+        run: /usr/bin/realpath /nix/store/6sfr9nl8la7j1311dg61wz9dk0q3gxgk-bash-5.3p3/bin/bash > "${{ runner.temp }}/dev1073-darwin-diagnostic/bash-resolved.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/bash-resolved.stderr"
+
+      - name: Resolve exact declared cp alias to its actual image
+        id: cp_resolved
+        if: ${{ always() && steps.probe_start.outcome == 'success' }}
+        continue-on-error: true
+        run: /usr/bin/realpath /nix/store/m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9.8/bin/cp > "${{ runner.temp }}/dev1073-darwin-diagnostic/cp-resolved.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/cp-resolved.stderr"
+
+      - name: Inspect exact Bash file type
+        id: bash_file
+        if: ${{ always() && steps.probe_start.outcome == 'success' }}
+        continue-on-error: true
+        run: /usr/bin/file -E -L /nix/store/6sfr9nl8la7j1311dg61wz9dk0q3gxgk-bash-5.3p3/bin/bash > "${{ runner.temp }}/dev1073-darwin-diagnostic/bash-file.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/bash-file.stderr"
+
+      - name: Inspect exact cp alias file type
+        id: cp_file
+        if: ${{ always() && steps.probe_start.outcome == 'success' }}
+        continue-on-error: true
+        run: /usr/bin/file -E -L /nix/store/m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9.8/bin/cp > "${{ runner.temp }}/dev1073-darwin-diagnostic/cp-file.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/cp-file.stderr"
+
+      - name: Inspect exact Coreutils image file type
+        id: coreutils_file
+        if: ${{ always() && steps.probe_start.outcome == 'success' }}
+        continue-on-error: true
+        run: /usr/bin/file -E -L /nix/store/m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9.8/bin/coreutils > "${{ runner.temp }}/dev1073-darwin-diagnostic/coreutils-file.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/coreutils-file.stderr"
+
+      - name: Inspect exact Bash dynamic linkage
+        id: bash_linkage
+        if: ${{ always() && steps.probe_start.outcome == 'success' }}
+        continue-on-error: true
+        run: /usr/bin/otool -L /nix/store/6sfr9nl8la7j1311dg61wz9dk0q3gxgk-bash-5.3p3/bin/bash > "${{ runner.temp }}/dev1073-darwin-diagnostic/bash-linkage.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/bash-linkage.stderr"
+
+      - name: Inspect exact cp alias dynamic linkage
+        id: cp_linkage
+        if: ${{ always() && steps.probe_start.outcome == 'success' }}
+        continue-on-error: true
+        run: /usr/bin/otool -L /nix/store/m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9.8/bin/cp > "${{ runner.temp }}/dev1073-darwin-diagnostic/cp-linkage.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/cp-linkage.stderr"
+
+      - name: Inspect exact Coreutils image dynamic linkage
+        id: coreutils_linkage
+        if: ${{ always() && steps.probe_start.outcome == 'success' }}
+        continue-on-error: true
+        run: /usr/bin/otool -L /nix/store/m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9.8/bin/coreutils > "${{ runner.temp }}/dev1073-darwin-diagnostic/coreutils-linkage.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/coreutils-linkage.stderr"
+
+      - name: Display exact Bash code signature without modifying it
+        id: bash_signature
+        if: ${{ always() && steps.probe_start.outcome == 'success' }}
+        continue-on-error: true
+        run: /usr/bin/codesign --display --verbose=4 /nix/store/6sfr9nl8la7j1311dg61wz9dk0q3gxgk-bash-5.3p3/bin/bash > "${{ runner.temp }}/dev1073-darwin-diagnostic/bash-signature.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/bash-signature.stderr"
+
+      - name: Display exact cp alias code signature without modifying it
+        id: cp_signature
+        if: ${{ always() && steps.probe_start.outcome == 'success' }}
+        continue-on-error: true
+        run: /usr/bin/codesign --display --verbose=4 /nix/store/m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9.8/bin/cp > "${{ runner.temp }}/dev1073-darwin-diagnostic/cp-signature.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/cp-signature.stderr"
+
+      - name: Display exact Coreutils image code signature without modifying it
+        id: coreutils_signature
+        if: ${{ always() && steps.probe_start.outcome == 'success' }}
+        continue-on-error: true
+        run: /usr/bin/codesign --display --verbose=4 /nix/store/m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9.8/bin/coreutils > "${{ runner.temp }}/dev1073-darwin-diagnostic/coreutils-signature.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/coreutils-signature.stderr"
+
+      - name: Probe exact Bash version, not a copy execution
+        id: bash_version
+        if: ${{ always() && steps.probe_start.outcome == 'success' }}
+        continue-on-error: true
+        run: /nix/store/6sfr9nl8la7j1311dg61wz9dk0q3gxgk-bash-5.3p3/bin/bash --noprofile --norc --version > "${{ runner.temp }}/dev1073-darwin-diagnostic/bash-version.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/bash-version.stderr"
+
+      - name: Probe exact cp alias version, not a copy execution
+        id: cp_version
+        if: ${{ always() && steps.probe_start.outcome == 'success' }}
+        continue-on-error: true
+        run: /nix/store/m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9.8/bin/cp --version > "${{ runner.temp }}/dev1073-darwin-diagnostic/cp-version.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/cp-version.stderr"
+
+      - name: Probe exact Coreutils image version, not a copy execution
+        id: coreutils_version
+        if: ${{ always() && steps.probe_start.outcome == 'success' }}
+        continue-on-error: true
+        run: /nix/store/m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9.8/bin/coreutils --version > "${{ runner.temp }}/dev1073-darwin-diagnostic/coreutils-version.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/coreutils-version.stderr"
+
+      - name: Record native binary probe end even after individual failures
+        id: probe_end
+        if: ${{ always() && steps.probe_start.outcome == 'success' }}
+        run: /bin/date -u '+end=%Y-%m-%d %H:%M:%S%z' >> "$GITHUB_OUTPUT"
+
+      - name: Close whole UTC scope after build and native binary probes
+        id: window_end
+        if: ${{ always() && steps.window_start.outcome == 'success' }}
+        run: /bin/date -u -v+1S '+end=%Y-%m-%d %H:%M:%S%z' >> "$GITHUB_OUTPUT"
 
       - name: Read target-related termination and security records in the UTC window
         id: termination_log
@@ -114,7 +226,7 @@ jobs:
         run: >-
           /usr/bin/log show --style json --timezone UTC --info --debug
           --start '${{ steps.window_start.outputs.start }}' --end '${{ steps.window_end.outputs.end }}'
-          --predicate '(process IN {"kernel", "amfid", "syspolicyd", "taskgated", "taskgated-helper"}) AND (eventMessage CONTAINS[c] "nix-daemon" OR eventMessage CONTAINS[c] "(cp)" OR eventMessage CONTAINS[c] "(bash)" OR eventMessage CONTAINS[c] "/m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9.8/bin/cp" OR eventMessage CONTAINS[c] "/6sfr9nl8la7j1311dg61wz9dk0q3gxgk-bash-5.3p3/bin/bash" OR eventMessage CONTAINS[c] "gxsnb1ijlh13ajc4daz1rgp6g9hg75vh" OR eventMessage CONTAINS[c] "ikgclz97jpz52jy6fml1ivykv2kjnxdm")'
+          --predicate '(process IN {"kernel", "amfid", "syspolicyd", "taskgated", "taskgated-helper"}) AND (eventMessage CONTAINS[c] "nix-daemon" OR eventMessage CONTAINS[c] "(cp)" OR eventMessage CONTAINS[c] "(coreutils)" OR eventMessage CONTAINS[c] "(bash)" OR eventMessage CONTAINS[c] "/m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9.8/bin/cp" OR eventMessage CONTAINS[c] "/m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9.8/bin/coreutils" OR eventMessage CONTAINS[c] "/6sfr9nl8la7j1311dg61wz9dk0q3gxgk-bash-5.3p3/bin/bash" OR eventMessage CONTAINS[c] "63h620l1ix5lx3ijm77mpncd7m6v2f42" OR eventMessage CONTAINS[c] "msby1pbc9vxqhaa5v1x17dm4div23ijl")'
           > "${{ runner.temp }}/dev1073-darwin-diagnostic/termination-security.json"
           2> "${{ runner.temp }}/dev1073-darwin-diagnostic/termination-security.stderr"
 
@@ -133,7 +245,7 @@ jobs:
         id: target_log
         if: ${{ always() && steps.build.outcome != 'skipped' && steps.setup.outcome == 'success' }}
         continue-on-error: true
-        run: nix log /nix/store/gxsnb1ijlh13ajc4daz1rgp6g9hg75vh-backend-es-check-workspace.drv > "${{ runner.temp }}/dev1073-darwin-diagnostic/target-build.log" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/target-build-log.stderr"
+        run: nix log /nix/store/63h620l1ix5lx3ijm77mpncd7m6v2f42-purs-backend-es-runtime-1.4.3.drv > "${{ runner.temp }}/dev1073-darwin-diagnostic/target-build.log" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/target-build-log.stderr"
 
       - name: Retain build and collector outcomes and measurement limits
         if: ${{ always() && steps.evidence.outcome == 'success' && steps.setup.outcome == 'success' }}
@@ -144,6 +256,28 @@ jobs:
             checkoutIdentity = "${{ steps.checkout_identity.outcome }}";
             nixVersion = "${{ steps.nix_version.outcome }}";
             build = "${{ steps.build.outcome }}";
+            buildStart = "${{ steps.build_start.outputs.start }}";
+            buildStartOutcome = "${{ steps.build_start.outcome }}";
+            buildEnd = "${{ steps.build_end.outputs.end }}";
+            buildEndOutcome = "${{ steps.build_end.outcome }}";
+            probeStart = "${{ steps.probe_start.outputs.start }}";
+            probeStartOutcome = "${{ steps.probe_start.outcome }}";
+            probeEnd = "${{ steps.probe_end.outputs.end }}";
+            probeEndOutcome = "${{ steps.probe_end.outcome }}";
+            bashResolved = "${{ steps.bash_resolved.outcome }}";
+            cpResolved = "${{ steps.cp_resolved.outcome }}";
+            bashFile = "${{ steps.bash_file.outcome }}";
+            cpFile = "${{ steps.cp_file.outcome }}";
+            coreutilsFile = "${{ steps.coreutils_file.outcome }}";
+            bashLinkage = "${{ steps.bash_linkage.outcome }}";
+            cpLinkage = "${{ steps.cp_linkage.outcome }}";
+            coreutilsLinkage = "${{ steps.coreutils_linkage.outcome }}";
+            bashSignature = "${{ steps.bash_signature.outcome }}";
+            cpSignature = "${{ steps.cp_signature.outcome }}";
+            coreutilsSignature = "${{ steps.coreutils_signature.outcome }}";
+            bashVersion = "${{ steps.bash_version.outcome }}";
+            cpVersion = "${{ steps.cp_version.outcome }}";
+            coreutilsVersion = "${{ steps.coreutils_version.outcome }}";
             windowStart = "${{ steps.window_start.outputs.start }}";
             windowStartOutcome = "${{ steps.window_start.outcome }}";
             windowEnd = "${{ steps.window_end.outputs.end }}";
@@ -164,6 +298,10 @@ jobs:
               "pgrep status 1 means no matching live PID; other failures, missing tools, permissions and empty logs are unavailable evidence, not causes"
               "memory snapshots and kernel records describe the host, not a target process peak or proof of OOM"
               "default Nix substitution is preserved; a reused target is not a fresh materialization execution"
+              "native binary probes run after the sole runtime build attempt; missing dependencies make probes unavailable rather than authorising another build"
+              "probe outcomes, unsigned metadata and generic nonfatal unsigned records do not establish a kill cause or identify the runtime builder"
+              "build/probe bounds have whole-second precision; boundary events need step timestamps and PID correlation and may remain ambiguous"
+              "Coreutils is the expected resolved image of the declared cp symlink; realpath output records actual resolution without changing the immutable payload"
               "setup or host loss can prevent final collectors or upload; GitHub step outcomes and exit codes remain separate evidence"
             ];
           }' > "${{ runner.temp }}/dev1073-darwin-diagnostic/outcomes-and-limits.json" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/outcomes-and-limits.stderr"
@@ -172,7 +310,7 @@ jobs:
         if: ${{ always() && steps.evidence.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: dev1073-darwin-workspace-${{ github.run_id }}-${{ github.run_attempt }}
+          name: dev1073-darwin-runtime-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/dev1073-darwin-diagnostic/
           if-no-files-found: error
           retention-days: 7

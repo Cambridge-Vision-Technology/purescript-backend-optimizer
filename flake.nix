@@ -410,6 +410,7 @@
       lib.upstreamDecoderEvidence = forAllSystems (system: perSystem.${system}.upstreamDecoderEvidence);
       packages = forAllSystems (system: perSystem.${system}.packages // nixpkgs.lib.optionalAttrs (system == "x86_64-darwin") {
         diagnose-darwin-workspace = perSystem.${system}.checks.build.src;
+        diagnose-darwin-runtime = perSystem.${system}.packages.purs-backend-es.runtime;
       });
       checks = forAllSystems (system: perSystem.${system}.checks);
       devShells = forAllSystems (system: { default = perSystem.${system}.devShell; });
