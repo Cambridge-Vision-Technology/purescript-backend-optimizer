@@ -16,10 +16,11 @@ permissions:
 
 jobs:
   ci:
-    uses: Cambridge-Vision-Technology/ci/.github/workflows/workflow.yml@aa5e3d4010883a2796cc1f32a826f2cad6c4e3ac
+    uses: Cambridge-Vision-Technology/ci/.github/workflows/workflow.yml@fc4d47303294aa1a7c7b1b8fd4e44aaf70c4378b
     with:
       enable-org-read-access: false
       check-dev-shells: true
+      enable-failure-diagnostics: true
       runner-map: |
         {
           "x86_64-linux": "ubuntu-24.04",
