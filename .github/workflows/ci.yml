@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   ci:
-    uses: Cambridge-Vision-Technology/ci/.github/workflows/workflow.yml@4b483fec594513904be9461fe7ee295e5edfc07c
+    uses: Cambridge-Vision-Technology/ci/.github/workflows/workflow.yml@c37d685e6dcb62e3f82cd8a8fae460f8c1bdd432
     with:
       enable-org-read-access: false
       check-dev-shells: true
