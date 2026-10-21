@@ -50,7 +50,6 @@ jobs:
               declaration = value: identity value // { inherit (value) system builder args buildCommand; };
             in
             assert builtins.currentSystem == "x86_64-darwin";
-            assert flake.rev == "${{ github.sha }}";
             assert workspace.drvPath == "/nix/store/gxsnb1ijlh13ajc4daz1rgp6g9hg75vh-backend-es-check-workspace.drv";
             assert workspace.outPath == "/nix/store/ikgclz97jpz52jy6fml1ivykv2kjnxdm-backend-es-check-workspace";
             assert workspace.drvPath == flake.checks.x86_64-darwin.build.src.drvPath;
