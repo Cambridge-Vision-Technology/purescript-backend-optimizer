@@ -1,4 +1,4 @@
-name: Diagnose Darwin runtime materialization
+name: Compare Darwin workspace materialization
 
 on:
   push:
@@ -25,32 +25,61 @@ jobs:
           checkout: true
           fetch-depth: '0'
 
-      - name: Record source and exact immutable declaration
+      - name: Retain the exact workflow commands
+        id: commands
+        run: /bin/cp .github/workflows/diagnose-darwin.yml "${{ runner.temp }}/dev1073-darwin-diagnostic/diagnose-darwin.yml"
+
+      - name: Enforce the Nix floor without a fallback
+        id: nix_floor
+        run: nix eval --raw --expr 'assert builtins.compareVersions builtins.nixVersion "2.35.0" >= 0; builtins.nixVersion' > "${{ runner.temp }}/dev1073-darwin-diagnostic/nix-floor.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/nix-floor.stderr"
+
+      - name: Record source and exact independent immutable declarations
         id: declaration
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.nix_floor.outcome == 'success' }}
         run: |
           nix eval --impure --json --expr '
             let
               flake = builtins.getFlake (toString ./.);
-              workspace = flake.packages.x86_64-darwin.diagnose-darwin-workspace;
-              target = flake.packages.x86_64-darwin.diagnose-darwin-runtime;
+              packages = flake.packages.x86_64-darwin;
+              pkgs = import flake.inputs.nixpkgs { system = "x86_64-darwin"; };
+              workspace = packages.diagnose-darwin-workspace;
+              runtime = packages.diagnose-darwin-runtime;
+              alternative = packages.diagnose-workspace-rsync;
+              layout = packages.diagnose-workspace-layout;
+              identity = value: { drv = value.drvPath; out = value.outPath; };
+              declaration = value: identity value // { inherit (value) system builder args buildCommand; };
             in
+            assert builtins.currentSystem == "x86_64-darwin";
+            assert flake.rev == "${{ github.sha }}";
             assert workspace.drvPath == "/nix/store/gxsnb1ijlh13ajc4daz1rgp6g9hg75vh-backend-es-check-workspace.drv";
             assert workspace.outPath == "/nix/store/ikgclz97jpz52jy6fml1ivykv2kjnxdm-backend-es-check-workspace";
             assert workspace.drvPath == flake.checks.x86_64-darwin.build.src.drvPath;
-            assert target.drvPath == "/nix/store/63h620l1ix5lx3ijm77mpncd7m6v2f42-purs-backend-es-runtime-1.4.3.drv";
-            assert target.outPath == "/nix/store/msby1pbc9vxqhaa5v1x17dm4div23ijl-purs-backend-es-runtime-1.4.3";
-            assert target.drvPath == flake.packages.x86_64-darwin.purs-backend-es.runtime.drvPath;
+            assert runtime.drvPath == "/nix/store/63h620l1ix5lx3ijm77mpncd7m6v2f42-purs-backend-es-runtime-1.4.3.drv";
+            assert runtime.outPath == "/nix/store/msby1pbc9vxqhaa5v1x17dm4div23ijl-purs-backend-es-runtime-1.4.3";
+            assert runtime.drvPath == packages.purs-backend-es.runtime.drvPath;
+            assert alternative.drvPath == "/nix/store/glk3zzbg74y0mwgbdpjk72f3k48gvbsa-backend-es-check-workspace-rsync.drv";
+            assert alternative.outPath == "/nix/store/zarmppcihh24d1v9zbl5s072c3r50hmb-backend-es-check-workspace-rsync";
+            assert layout.drvPath == "/nix/store/p265fcqiswbfdcx8qibfjr0vjlx9v2kd-backend-es-check-layout.drv";
+            assert layout.outPath == "/nix/store/0f10cafri71acn3gdlylbk7cn766z43n-backend-es-check-layout";
+            assert pkgs.bashNonInteractive.outPath == "/nix/store/6sfr9nl8la7j1311dg61wz9dk0q3gxgk-bash-5.3p3";
+            assert pkgs.coreutils.outPath == "/nix/store/m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9.8";
+            assert pkgs.rsync.outPath == "/nix/store/5vsql2rnfzlxqxjac7d2v4cp79z9fyxg-rsync-3.4.1";
+            assert pkgs.diffutils.outPath == "/nix/store/jh6w96g8g9xjdbcqm8lkrvxckplca0wc-diffutils-3.12";
             {
               sourceRef = "${{ github.ref }}";
               sourceSha = "${{ github.sha }}";
               runId = "${{ github.run_id }}";
               runAttempt = "${{ github.run_attempt }}";
               setup = "Cambridge-Vision-Technology/ci/setup@aa5e3d4010883a2796cc1f32a826f2cad6c4e3ac";
-              target = "packages.x86_64-darwin.diagnose-darwin-runtime";
-              drv = target.drvPath;
-              out = target.outPath;
-              inherit (target) system builder args buildCommand;
-              workspaceIdentity = { drv = workspace.drvPath; out = workspace.outPath; };
+              original = declaration workspace;
+              alternative = declaration alternative;
+              immutableInput = declaration layout;
+              runtime = declaration runtime;
+              tools = builtins.mapAttrs (_: value: identity value // { inherit (value) version; }) {
+                bash = pkgs.bashNonInteractive;
+                inherit (pkgs) coreutils rsync diffutils;
+              };
+              nixpkgs = { inherit (flake.inputs.nixpkgs) rev outPath; };
             }
           ' > "${{ runner.temp }}/dev1073-darwin-diagnostic/declaration.json" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/declaration.stderr"
 
@@ -64,10 +93,27 @@ jobs:
         continue-on-error: true
         run: nix --version > "${{ runner.temp }}/dev1073-darwin-diagnostic/nix-version.txt" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/nix-version.stderr"
 
-      - name: Open UTC scope before build and all native observations
+      - name: Record the native host system
+        id: host_system
+        continue-on-error: true
+        run: /usr/bin/uname -sm > "${{ runner.temp }}/dev1073-darwin-diagnostic/comparison-host-system.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/comparison-host-system.stderr"
+
+      - name: Acquire only comparison tools without either workspace output
+        id: tools
+        if: ${{ !cancelled() && steps.declaration.outcome == 'success' }}
+        continue-on-error: true
+        run: >-
+          /usr/bin/time -l -o "${{ runner.temp }}/dev1073-darwin-diagnostic/tools-client-time-rusage.txt"
+          nix build --impure --no-link --print-out-paths --print-build-logs --log-format raw --expr
+          'let flake = builtins.getFlake (toString ./.); pkgs = import flake.inputs.nixpkgs { system = "x86_64-darwin"; }; in [ pkgs.coreutils pkgs.diffutils pkgs.rsync ]'
+          > "${{ runner.temp }}/dev1073-darwin-diagnostic/tools.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/tools.stderr"
+
+      - name: Open UTC scope before both attempts and all native observations
         id: window_start
         if: ${{ !cancelled() && steps.declaration.outcome == 'success' }}
-        run: /bin/date -u '+start=%Y-%m-%d %H:%M:%S%z' >> "$GITHUB_OUTPUT"
+        run: |
+          /bin/date -u '+start=%Y-%m-%d %H:%M:%S%z' >> "$GITHUB_OUTPUT"
+          /bin/cp "$GITHUB_OUTPUT" "${{ runner.temp }}/dev1073-darwin-diagnostic/comparison-window-start.txt"
 
       - name: Snapshot Nix daemon PIDs before build, without arguments
         id: daemon_before
@@ -75,11 +121,11 @@ jobs:
         continue-on-error: true
         run: /usr/bin/pgrep -l -x nix-daemon > "${{ runner.temp }}/dev1073-darwin-diagnostic/daemon-before.txt" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/daemon-before.stderr"
 
-      - name: Snapshot exact Bash, cp or resolved Coreutils PIDs before build, without arguments
+      - name: Snapshot exact Bash, cp, Coreutils or rsync PIDs before attempts, without arguments
         id: builder_before
         if: ${{ !cancelled() && steps.window_start.outcome == 'success' }}
         continue-on-error: true
-        run: /usr/bin/pgrep -f '^/nix/store/(6sfr9nl8la7j1311dg61wz9dk0q3gxgk-bash-5\.3p3/bin/bash|m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9\.8/bin/(cp|coreutils))( |$)' > "${{ runner.temp }}/dev1073-darwin-diagnostic/builder-before-pids.txt" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/builder-before-pids.stderr"
+        run: /usr/bin/pgrep -f '^/nix/store/(6sfr9nl8la7j1311dg61wz9dk0q3gxgk-bash-5\.3p3/bin/bash|m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9\.8/bin/(cp|coreutils)|5vsql2rnfzlxqxjac7d2v4cp79z9fyxg-rsync-3\.4\.1/bin/rsync)( |$)' > "${{ runner.temp }}/dev1073-darwin-diagnostic/builder-before-pids.txt" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/builder-before-pids.stderr"
 
       - name: Observe memory before build, no pressure or simulation flags
         id: memory_before
@@ -87,42 +133,124 @@ jobs:
         continue-on-error: true
         run: /usr/bin/memory_pressure > "${{ runner.temp }}/dev1073-darwin-diagnostic/memory-before.txt" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/memory-before.stderr"
 
-      - name: Record build start, separate from native binary probes
-        id: build_start
+      - name: Open original attempt window
+        id: original_start
         if: ${{ !cancelled() && steps.window_start.outcome == 'success' }}
-        run: /bin/date -u '+start=%Y-%m-%d %H:%M:%S%z' >> "$GITHUB_OUTPUT"
+        run: |
+          /bin/date -u '+start=%Y-%m-%d %H:%M:%S%z' >> "$GITHUB_OUTPUT"
+          /bin/cp "$GITHUB_OUTPUT" "${{ runner.temp }}/dev1073-darwin-diagnostic/original-window-start.txt"
 
-      - name: Build only the exact runtime, timing the Nix client, not daemon builders
-        id: build
-        if: ${{ !cancelled() && steps.window_start.outcome == 'success' && steps.build_start.outcome == 'success' }}
-        run: /usr/bin/time -l -o "${{ runner.temp }}/dev1073-darwin-diagnostic/nix-client-time-rusage.txt" nix build --no-link --print-out-paths --print-build-logs --log-format raw .#packages.x86_64-darwin.diagnose-darwin-runtime > "${{ runner.temp }}/dev1073-darwin-diagnostic/build.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/build.stderr"
+      - name: Attempt only the original exact workspace, timing the client not daemon builders
+        id: original
+        if: ${{ !cancelled() && steps.original_start.outcome == 'success' }}
+        run: /usr/bin/time -l -o "${{ runner.temp }}/dev1073-darwin-diagnostic/original-client-time-rusage.txt" nix build --no-link --print-out-paths --print-build-logs --log-format raw .#packages.x86_64-darwin.diagnose-darwin-workspace > "${{ runner.temp }}/dev1073-darwin-diagnostic/original.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/original.stderr"
 
-      - name: Record build end even after failure, before native binary probes
-        id: build_end
-        if: ${{ always() && steps.build.outcome != 'skipped' && steps.build_start.outcome == 'success' }}
-        run: /bin/date -u '+end=%Y-%m-%d %H:%M:%S%z' >> "$GITHUB_OUTPUT"
+      - name: Close original attempt window even after failure
+        id: original_end
+        if: ${{ always() && steps.original.outcome != 'skipped' && steps.original_start.outcome == 'success' }}
+        run: |
+          /bin/date -u '+end=%Y-%m-%d %H:%M:%S%z' >> "$GITHUB_OUTPUT"
+          /bin/cp "$GITHUB_OUTPUT" "${{ runner.temp }}/dev1073-darwin-diagnostic/original-window-end.txt"
+
+      - name: Open alternative attempt window independently of original outcome
+        id: alternative_start
+        if: ${{ !cancelled() && steps.declaration.outcome == 'success' && steps.window_start.outcome == 'success' }}
+        run: |
+          /bin/date -u '+start=%Y-%m-%d %H:%M:%S%z' >> "$GITHUB_OUTPUT"
+          /bin/cp "$GITHUB_OUTPUT" "${{ runner.temp }}/dev1073-darwin-diagnostic/alternative-window-start.txt"
+
+      - name: Attempt only the separate rsync workspace even if original failed
+        id: alternative
+        if: ${{ !cancelled() && steps.alternative_start.outcome == 'success' }}
+        run: /usr/bin/time -l -o "${{ runner.temp }}/dev1073-darwin-diagnostic/alternative-client-time-rusage.txt" nix build --no-link --print-out-paths --print-build-logs --log-format raw .#packages.x86_64-darwin.diagnose-workspace-rsync > "${{ runner.temp }}/dev1073-darwin-diagnostic/alternative.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/alternative.stderr"
+
+      - name: Close alternative attempt window even after failure
+        id: alternative_end
+        if: ${{ always() && steps.alternative.outcome != 'skipped' && steps.alternative_start.outcome == 'success' }}
+        run: |
+          /bin/date -u '+end=%Y-%m-%d %H:%M:%S%z' >> "$GITHUB_OUTPUT"
+          /bin/cp "$GITHUB_OUTPUT" "${{ runner.temp }}/dev1073-darwin-diagnostic/alternative-window-end.txt"
 
       - name: Snapshot Nix daemon PIDs after build, without arguments
         id: daemon_after
-        if: ${{ always() && steps.build_end.outcome == 'success' }}
+        if: ${{ always() && steps.alternative_end.outcome == 'success' }}
         continue-on-error: true
         run: /usr/bin/pgrep -l -x nix-daemon > "${{ runner.temp }}/dev1073-darwin-diagnostic/daemon-after.txt" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/daemon-after.stderr"
 
-      - name: Snapshot exact Bash, cp or resolved Coreutils PIDs after build, without arguments
+      - name: Snapshot exact Bash, cp, Coreutils or rsync PIDs after attempts, without arguments
         id: builder_after
-        if: ${{ always() && steps.build_end.outcome == 'success' }}
+        if: ${{ always() && steps.alternative_end.outcome == 'success' }}
         continue-on-error: true
-        run: /usr/bin/pgrep -f '^/nix/store/(6sfr9nl8la7j1311dg61wz9dk0q3gxgk-bash-5\.3p3/bin/bash|m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9\.8/bin/(cp|coreutils))( |$)' > "${{ runner.temp }}/dev1073-darwin-diagnostic/builder-after-pids.txt" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/builder-after-pids.stderr"
+        run: /usr/bin/pgrep -f '^/nix/store/(6sfr9nl8la7j1311dg61wz9dk0q3gxgk-bash-5\.3p3/bin/bash|m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9\.8/bin/(cp|coreutils)|5vsql2rnfzlxqxjac7d2v4cp79z9fyxg-rsync-3\.4\.1/bin/rsync)( |$)' > "${{ runner.temp }}/dev1073-darwin-diagnostic/builder-after-pids.txt" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/builder-after-pids.stderr"
 
       - name: Observe memory after build, no pressure or simulation flags
         id: memory_after
-        if: ${{ always() && steps.build_end.outcome == 'success' }}
+        if: ${{ always() && steps.alternative_end.outcome == 'success' }}
         continue-on-error: true
         run: /usr/bin/memory_pressure > "${{ runner.temp }}/dev1073-darwin-diagnostic/memory-after.txt" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/memory-after.stderr"
 
-      - name: Open native binary probe window after target attempt and dependency acquisition
+      - name: Open native comparison window after independent attempts
+        id: parity_start
+        if: ${{ always() && steps.window_start.outcome == 'success' }}
+        run: |
+          /bin/date -u '+start=%Y-%m-%d %H:%M:%S%z' >> "$GITHUB_OUTPUT"
+          /bin/cp "$GITHUB_OUTPUT" "${{ runner.temp }}/dev1073-darwin-diagnostic/comparison-parity-start.txt"
+
+      - name: Compare alternative bytes and tree against original immutable input even if original failed
+        id: input_diff
+        if: ${{ always() && steps.parity_start.outcome == 'success' && steps.alternative.outcome == 'success' }}
+        run: /usr/bin/time -l -o "${{ runner.temp }}/dev1073-darwin-diagnostic/comparison-diff-time-rusage.txt" /nix/store/jh6w96g8g9xjdbcqm8lkrvxckplca0wc-diffutils-3.12/bin/diff --recursive /nix/store/0f10cafri71acn3gdlylbk7cn766z43n-backend-es-check-layout/ /nix/store/zarmppcihh24d1v9zbl5s072c3r50hmb-backend-es-check-workspace-rsync/ > "${{ runner.temp }}/dev1073-darwin-diagnostic/comparison-input-diff.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/comparison-input-diff.stderr"
+
+      - name: Retain independent immutable-input checksum type and permission changes without materialization chmod
+        id: input_modes
+        if: ${{ always() && steps.parity_start.outcome == 'success' && steps.alternative.outcome == 'success' }}
+        run: /usr/bin/time -l -o "${{ runner.temp }}/dev1073-darwin-diagnostic/comparison-modes-time-rusage.txt" /nix/store/5vsql2rnfzlxqxjac7d2v4cp79z9fyxg-rsync-3.4.1/bin/rsync --recursive --copy-links --perms --checksum --dry-run --itemize-changes /nix/store/0f10cafri71acn3gdlylbk7cn766z43n-backend-es-check-layout/ /nix/store/zarmppcihh24d1v9zbl5s072c3r50hmb-backend-es-check-workspace-rsync/ > "${{ runner.temp }}/dev1073-darwin-diagnostic/comparison-input-mode-changes.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/comparison-input-mode-changes.stderr"
+
+      - name: Assert the retained native change report is empty, not merely rsync exit zero
+        id: input_modes_equal
+        if: ${{ always() && steps.input_modes.outcome == 'success' }}
+        run: /usr/bin/cmp /dev/null "${{ runner.temp }}/dev1073-darwin-diagnostic/comparison-input-mode-changes.stdout" > "${{ runner.temp }}/dev1073-darwin-diagnostic/comparison-input-mode-equality.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/comparison-input-mode-equality.stderr"
+
+      - name: Retain actual alternative names types and executable modes
+        id: alternative_tree
+        if: ${{ always() && steps.alternative.outcome == 'success' }}
+        run: nix store ls --recursive --long /nix/store/zarmppcihh24d1v9zbl5s072c3r50hmb-backend-es-check-workspace-rsync > "${{ runner.temp }}/dev1073-darwin-diagnostic/comparison-alternative-tree.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/comparison-alternative-tree.stderr"
+
+      - name: Retain original immutable link-farm names types and modes
+        id: input_tree
+        if: ${{ always() && steps.alternative.outcome == 'success' }}
+        run: nix store ls --recursive --long /nix/store/0f10cafri71acn3gdlylbk7cn766z43n-backend-es-check-layout > "${{ runner.temp }}/dev1073-darwin-diagnostic/comparison-input-tree.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/comparison-input-tree.stderr"
+
+      - name: Retain dereferenced immutable input and actual alternative launcher and regular-file modes
+        id: file_modes
+        if: ${{ always() && steps.alternative.outcome == 'success' }}
+        run: /nix/store/m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9.8/bin/stat --dereference --format='%n %F %a' /nix/store/0f10cafri71acn3gdlylbk7cn766z43n-backend-es-check-layout/backend-es/index.js /nix/store/zarmppcihh24d1v9zbl5s072c3r50hmb-backend-es-check-workspace-rsync/backend-es/index.js /nix/store/0f10cafri71acn3gdlylbk7cn766z43n-backend-es-check-layout/spago.yaml /nix/store/zarmppcihh24d1v9zbl5s072c3r50hmb-backend-es-check-workspace-rsync/spago.yaml > "${{ runner.temp }}/dev1073-darwin-diagnostic/comparison-file-modes.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/comparison-file-modes.stderr"
+
+      - name: Hash actual original Darwin output only if realized
+        id: original_hash
+        if: ${{ always() && steps.original.outcome == 'success' }}
+        run: nix hash path /nix/store/ikgclz97jpz52jy6fml1ivykv2kjnxdm-backend-es-check-workspace > "${{ runner.temp }}/dev1073-darwin-diagnostic/original.narhash" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/original-hash.stderr"
+
+      - name: Hash actual alternative Darwin output independently
+        id: alternative_hash
+        if: ${{ always() && steps.alternative.outcome == 'success' }}
+        run: nix hash path /nix/store/zarmppcihh24d1v9zbl5s072c3r50hmb-backend-es-check-workspace-rsync > "${{ runner.temp }}/dev1073-darwin-diagnostic/alternative.narhash" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/alternative-hash.stderr"
+
+      - name: Directly compare both actual Darwin hashes, never a Linux expectation
+        id: hashes_equal
+        if: ${{ always() && steps.original_hash.outcome == 'success' && steps.alternative_hash.outcome == 'success' }}
+        run: /usr/bin/cmp "${{ runner.temp }}/dev1073-darwin-diagnostic/original.narhash" "${{ runner.temp }}/dev1073-darwin-diagnostic/alternative.narhash" > "${{ runner.temp }}/dev1073-darwin-diagnostic/comparison-hash-equality.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/comparison-hash-equality.stderr"
+
+      - name: Close native comparison window even after individual failures
+        id: parity_end
+        if: ${{ always() && steps.parity_start.outcome == 'success' }}
+        run: |
+          /bin/date -u '+end=%Y-%m-%d %H:%M:%S%z' >> "$GITHUB_OUTPUT"
+          /bin/cp "$GITHUB_OUTPUT" "${{ runner.temp }}/dev1073-darwin-diagnostic/comparison-parity-end.txt"
+
+      - name: Open native binary probe window after both attempts
         id: probe_start
-        if: ${{ always() && steps.window_start.outcome == 'success' && steps.build.outcome != 'skipped' }}
+        if: ${{ always() && steps.window_start.outcome == 'success' }}
         run: /bin/date -u '+start=%Y-%m-%d %H:%M:%S%z' >> "$GITHUB_OUTPUT"
 
       - name: Resolve exact declared Bash image
@@ -136,6 +264,18 @@ jobs:
         if: ${{ always() && steps.probe_start.outcome == 'success' }}
         continue-on-error: true
         run: /usr/bin/realpath /nix/store/m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9.8/bin/cp > "${{ runner.temp }}/dev1073-darwin-diagnostic/cp-resolved.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/cp-resolved.stderr"
+
+      - name: Resolve exact declared rsync image
+        id: rsync_resolved
+        if: ${{ always() && steps.probe_start.outcome == 'success' }}
+        continue-on-error: true
+        run: /usr/bin/realpath /nix/store/5vsql2rnfzlxqxjac7d2v4cp79z9fyxg-rsync-3.4.1/bin/rsync > "${{ runner.temp }}/dev1073-darwin-diagnostic/rsync-resolved.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/rsync-resolved.stderr"
+
+      - name: Inspect exact rsync file type
+        id: rsync_file
+        if: ${{ always() && steps.probe_start.outcome == 'success' }}
+        continue-on-error: true
+        run: /usr/bin/file -E -L /nix/store/5vsql2rnfzlxqxjac7d2v4cp79z9fyxg-rsync-3.4.1/bin/rsync > "${{ runner.temp }}/dev1073-darwin-diagnostic/rsync-file.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/rsync-file.stderr"
 
       - name: Inspect exact Bash file type
         id: bash_file
@@ -227,63 +367,128 @@ jobs:
         continue-on-error: true
         run: /nix/store/m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9.8/bin/coreutils --version > "${{ runner.temp }}/dev1073-darwin-diagnostic/coreutils-version.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/coreutils-version.stderr"
 
+      - name: Probe exact rsync version, not a materialization execution
+        id: rsync_version
+        if: ${{ always() && steps.probe_start.outcome == 'success' }}
+        continue-on-error: true
+        run: /nix/store/5vsql2rnfzlxqxjac7d2v4cp79z9fyxg-rsync-3.4.1/bin/rsync --version > "${{ runner.temp }}/dev1073-darwin-diagnostic/rsync-version.stdout" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/rsync-version.stderr"
+
       - name: Record native binary probe end even after individual failures
         id: probe_end
         if: ${{ always() && steps.probe_start.outcome == 'success' }}
         run: /bin/date -u '+end=%Y-%m-%d %H:%M:%S%z' >> "$GITHUB_OUTPUT"
 
-      - name: Close whole UTC scope after build and native binary probes
+      - name: Close whole UTC scope after attempts comparisons and native probes
         id: window_end
         if: ${{ always() && steps.window_start.outcome == 'success' }}
-        run: /bin/date -u -v+1S '+end=%Y-%m-%d %H:%M:%S%z' >> "$GITHUB_OUTPUT"
+        run: |
+          /bin/date -u -v+1S '+end=%Y-%m-%d %H:%M:%S%z' >> "$GITHUB_OUTPUT"
+          /bin/cp "$GITHUB_OUTPUT" "${{ runner.temp }}/dev1073-darwin-diagnostic/comparison-window-end.txt"
 
       - name: Read target-related termination and security records in the UTC window
         id: termination_log
         if: ${{ always() && steps.window_start.outcome == 'success' && steps.window_end.outcome == 'success' }}
         continue-on-error: true
+        timeout-minutes: 2
         run: >-
           /usr/bin/log show --style json --timezone UTC --info --debug
           --start '${{ steps.window_start.outputs.start }}' --end '${{ steps.window_end.outputs.end }}'
-          --predicate '(process IN {"kernel", "amfid", "syspolicyd", "taskgated", "taskgated-helper"}) AND (eventMessage CONTAINS[c] "nix-daemon" OR eventMessage CONTAINS[c] "(cp)" OR eventMessage CONTAINS[c] "(coreutils)" OR eventMessage CONTAINS[c] "(bash)" OR eventMessage CONTAINS[c] "/m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9.8/bin/cp" OR eventMessage CONTAINS[c] "/m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9.8/bin/coreutils" OR eventMessage CONTAINS[c] "/6sfr9nl8la7j1311dg61wz9dk0q3gxgk-bash-5.3p3/bin/bash" OR eventMessage CONTAINS[c] "63h620l1ix5lx3ijm77mpncd7m6v2f42" OR eventMessage CONTAINS[c] "msby1pbc9vxqhaa5v1x17dm4div23ijl")'
+          --predicate '(process IN {"kernel", "amfid", "syspolicyd", "taskgated", "taskgated-helper"}) AND (eventMessage CONTAINS[c] "/nix/store/m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9.8/bin/cp" OR eventMessage CONTAINS[c] "/nix/store/m63c78djvjc9106g3dr99sfh1m841f3a-coreutils-9.8/bin/coreutils" OR eventMessage CONTAINS[c] "/nix/store/6sfr9nl8la7j1311dg61wz9dk0q3gxgk-bash-5.3p3/bin/bash" OR eventMessage CONTAINS[c] "/nix/store/5vsql2rnfzlxqxjac7d2v4cp79z9fyxg-rsync-3.4.1/bin/rsync" OR eventMessage CONTAINS[c] "gxsnb1ijlh13ajc4daz1rgp6g9hg75vh-backend-es-check-workspace" OR eventMessage CONTAINS[c] "ikgclz97jpz52jy6fml1ivykv2kjnxdm-backend-es-check-workspace" OR eventMessage CONTAINS[c] "glk3zzbg74y0mwgbdpjk72f3k48gvbsa-backend-es-check-workspace-rsync" OR eventMessage CONTAINS[c] "zarmppcihh24d1v9zbl5s072c3r50hmb-backend-es-check-workspace-rsync")'
           > "${{ runner.temp }}/dev1073-darwin-diagnostic/termination-security.json"
           2> "${{ runner.temp }}/dev1073-darwin-diagnostic/termination-security.stderr"
 
-      - name: Read kernel memory-pressure records in the UTC window, not a target peak measurement
-        id: pressure_log
-        if: ${{ always() && steps.window_start.outcome == 'success' && steps.window_end.outcome == 'success' }}
+      - name: Retrieve only the original workspace build log including failure
+        id: original_log
+        if: ${{ always() && steps.original.outcome != 'skipped' && steps.declaration.outcome == 'success' }}
         continue-on-error: true
-        run: >-
-          /usr/bin/log show --style json --timezone UTC --info --debug
-          --start '${{ steps.window_start.outputs.start }}' --end '${{ steps.window_end.outputs.end }}'
-          --predicate 'process == "kernel" AND (eventMessage CONTAINS[c] "memorystatus" OR eventMessage CONTAINS[c] "memory pressure" OR eventMessage CONTAINS[c] "jetsam")'
-          > "${{ runner.temp }}/dev1073-darwin-diagnostic/kernel-memory-pressure.json"
-          2> "${{ runner.temp }}/dev1073-darwin-diagnostic/kernel-memory-pressure.stderr"
+        timeout-minutes: 2
+        run: nix log /nix/store/gxsnb1ijlh13ajc4daz1rgp6g9hg75vh-backend-es-check-workspace.drv > "${{ runner.temp }}/dev1073-darwin-diagnostic/original-build.log" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/original-build-log.stderr"
 
-      - name: Retrieve only the exact target Nix build log, including a failed build
-        id: target_log
-        if: ${{ always() && steps.build.outcome != 'skipped' && steps.setup.outcome == 'success' }}
+      - name: Retrieve only the alternative workspace build log including failure
+        id: alternative_log
+        if: ${{ always() && steps.alternative.outcome != 'skipped' && steps.declaration.outcome == 'success' }}
         continue-on-error: true
-        run: nix log /nix/store/63h620l1ix5lx3ijm77mpncd7m6v2f42-purs-backend-es-runtime-1.4.3.drv > "${{ runner.temp }}/dev1073-darwin-diagnostic/target-build.log" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/target-build-log.stderr"
+        timeout-minutes: 2
+        run: nix log /nix/store/glk3zzbg74y0mwgbdpjk72f3k48gvbsa-backend-es-check-workspace-rsync.drv > "${{ runner.temp }}/dev1073-darwin-diagnostic/alternative-build.log" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/alternative-build-log.stderr"
+
+      - name: Retain exact original target dependency runtime and immutable input derivations
+        id: native_declarations
+        if: ${{ always() && steps.declaration.outcome == 'success' }}
+        continue-on-error: true
+        run: nix derivation show .#packages.x86_64-darwin.diagnose-darwin-workspace .#packages.x86_64-darwin.diagnose-workspace-rsync .#packages.x86_64-darwin.diagnose-workspace-layout .#packages.x86_64-darwin.diagnose-darwin-runtime > "${{ runner.temp }}/dev1073-darwin-diagnostic/comparison-native-declarations.json" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/comparison-native-declarations.stderr"
+
+      - name: Retain actual original output NAR registration only if realized
+        id: original_info
+        if: ${{ always() && steps.original.outcome == 'success' }}
+        continue-on-error: true
+        run: nix path-info --json --json-format 2 /nix/store/ikgclz97jpz52jy6fml1ivykv2kjnxdm-backend-es-check-workspace > "${{ runner.temp }}/dev1073-darwin-diagnostic/original-path-info.json" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/original-path-info.stderr"
+
+      - name: Retain actual alternative output NAR registration independently
+        id: alternative_info
+        if: ${{ always() && steps.alternative.outcome == 'success' }}
+        continue-on-error: true
+        run: nix path-info --json --json-format 2 /nix/store/zarmppcihh24d1v9zbl5s072c3r50hmb-backend-es-check-workspace-rsync > "${{ runner.temp }}/dev1073-darwin-diagnostic/alternative-path-info.json" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/alternative-path-info.stderr"
+
+      - name: Require complete immutable-input byte tree and executable-mode evidence
+        id: input_parity
+        if: ${{ always() && steps.declaration.outcome == 'success' }}
+        run: >-
+          nix eval --json --expr '
+          assert "${{ steps.input_diff.outcome }}" == "success";
+          assert "${{ steps.input_modes_equal.outcome }}" == "success";
+          assert "${{ steps.input_tree.outcome }}" == "success";
+          assert "${{ steps.alternative_tree.outcome }}" == "success";
+          assert "${{ steps.file_modes.outcome }}" == "success";
+          true'
+          > "${{ runner.temp }}/dev1073-darwin-diagnostic/comparison-input-parity.json" 2> "${{ runner.temp }}/dev1073-darwin-diagnostic/comparison-input-parity.stderr"
 
       - name: Retain build and collector outcomes and measurement limits
         if: ${{ always() && steps.evidence.outcome == 'success' && steps.setup.outcome == 'success' }}
         run: |
           nix eval --json --expr '{
             setup = "${{ steps.setup.outcome }}";
+            commands = "${{ steps.commands.outcome }}";
+            nixFloor = "${{ steps.nix_floor.outcome }}";
             declaration = "${{ steps.declaration.outcome }}";
             checkoutIdentity = "${{ steps.checkout_identity.outcome }}";
             nixVersion = "${{ steps.nix_version.outcome }}";
-            build = "${{ steps.build.outcome }}";
-            buildStart = "${{ steps.build_start.outputs.start }}";
-            buildStartOutcome = "${{ steps.build_start.outcome }}";
-            buildEnd = "${{ steps.build_end.outputs.end }}";
-            buildEndOutcome = "${{ steps.build_end.outcome }}";
+            hostSystem = "${{ steps.host_system.outcome }}";
+            tools = "${{ steps.tools.outcome }}";
+            original = "${{ steps.original.outcome }}";
+            originalStart = "${{ steps.original_start.outputs.start }}";
+            originalStartOutcome = "${{ steps.original_start.outcome }}";
+            originalEnd = "${{ steps.original_end.outputs.end }}";
+            originalEndOutcome = "${{ steps.original_end.outcome }}";
+            alternative = "${{ steps.alternative.outcome }}";
+            alternativeStart = "${{ steps.alternative_start.outputs.start }}";
+            alternativeStartOutcome = "${{ steps.alternative_start.outcome }}";
+            alternativeEnd = "${{ steps.alternative_end.outputs.end }}";
+            alternativeEndOutcome = "${{ steps.alternative_end.outcome }}";
+            comparisonStart = "${{ steps.parity_start.outputs.start }}";
+            comparisonStartOutcome = "${{ steps.parity_start.outcome }}";
+            comparisonEnd = "${{ steps.parity_end.outputs.end }}";
+            comparisonEndOutcome = "${{ steps.parity_end.outcome }}";
+            inputDiff = "${{ steps.input_diff.outcome }}";
+            inputModes = "${{ steps.input_modes.outcome }}";
+            inputModesEqual = "${{ steps.input_modes_equal.outcome }}";
+            inputTree = "${{ steps.input_tree.outcome }}";
+            alternativeTree = "${{ steps.alternative_tree.outcome }}";
+            fileModes = "${{ steps.file_modes.outcome }}";
+            inputParity = "${{ steps.input_parity.outcome }}";
+            originalHash = "${{ steps.original_hash.outcome }}";
+            alternativeHash = "${{ steps.alternative_hash.outcome }}";
+            hashesEqual = "${{ steps.hashes_equal.outcome }}";
+            originalInfo = "${{ steps.original_info.outcome }}";
+            alternativeInfo = "${{ steps.alternative_info.outcome }}";
+            nativeDeclarations = "${{ steps.native_declarations.outcome }}";
             probeStart = "${{ steps.probe_start.outputs.start }}";
             probeStartOutcome = "${{ steps.probe_start.outcome }}";
             probeEnd = "${{ steps.probe_end.outputs.end }}";
             probeEndOutcome = "${{ steps.probe_end.outcome }}";
             bashResolved = "${{ steps.bash_resolved.outcome }}";
             cpResolved = "${{ steps.cp_resolved.outcome }}";
+            rsyncResolved = "${{ steps.rsync_resolved.outcome }}";
+            rsyncFile = "${{ steps.rsync_file.outcome }}";
             bashFile = "${{ steps.bash_file.outcome }}";
             cpFile = "${{ steps.cp_file.outcome }}";
             coreutilsFile = "${{ steps.coreutils_file.outcome }}";
@@ -299,6 +504,7 @@ jobs:
             bashVersion = "${{ steps.bash_version.outcome }}";
             cpVersion = "${{ steps.cp_version.outcome }}";
             coreutilsVersion = "${{ steps.coreutils_version.outcome }}";
+            rsyncVersion = "${{ steps.rsync_version.outcome }}";
             windowStart = "${{ steps.window_start.outputs.start }}";
             windowStartOutcome = "${{ steps.window_start.outcome }}";
             windowEnd = "${{ steps.window_end.outputs.end }}";
@@ -310,17 +516,23 @@ jobs:
             memoryBefore = "${{ steps.memory_before.outcome }}";
             memoryAfter = "${{ steps.memory_after.outcome }}";
             terminationSecurityLog = "${{ steps.termination_log.outcome }}";
-            kernelMemoryPressureLog = "${{ steps.pressure_log.outcome }}";
-            targetBuildLog = "${{ steps.target_log.outcome }}";
+            originalBuildLog = "${{ steps.original_log.outcome }}";
+            alternativeBuildLog = "${{ steps.alternative_log.outcome }}";
             limits = [
-              "time rusage covers the Nix client and its waited children, not Nix-daemon builders or cp peak RSS; wall time includes evaluation, transfers and dependency work"
+              "GitHub step logs retain raw exit codes; outcomes JSON, client time/rusage, stdout and stderr are separate receipts; time forwards utility status but does not print a numeric status field"
+              "missing files or skipped steps are incomplete evidence, not successful comparisons"
+              "time rusage covers the Nix client and its waited children, not Nix-daemon builders or cp/rsync peak RSS; wall time includes evaluation, transfers and dependency work"
               "UTC log start is rounded down to a second and end is advanced one second before rounding to cover execution; records can include other matching host activity in that window"
               "PID snapshots are not an execution trace and cannot identify a dead builder or prove which executable received a signal"
               "pgrep status 1 means no matching live PID; other failures, missing tools, permissions and empty logs are unavailable evidence, not causes"
-              "memory snapshots and kernel records describe the host, not a target process peak or proof of OOM"
+              "memory snapshots describe the host, not a target process peak or proof of OOM; unscoped host kernel records are not collected"
               "default Nix substitution is preserved; a reused target is not a fresh materialization execution"
-              "native binary probes run after the sole runtime build attempt; missing dependencies make probes unavailable rather than authorising another build"
-              "probe outcomes, unsigned metadata and generic nonfatal unsigned records do not establish a kill cause or identify the runtime builder"
+              "build stderr and exact target logs must distinguish target execution from substitution and dependency failure; a prerequisite failure does not prove either materializer executed or failed"
+              "alternative and comparison tools have no original-workspace-output dependency; native input parity runs on alternative success even when original fails"
+              "input parity requires both recursive diff success and asserted empty checksum/type/permission change output plus mode receipts; dry-run exit zero alone proves no equality"
+              "hashesEqual skipped, missing or failed means incomplete or failed Darwin output comparison, never equality; actual hashes are not Linux expectations"
+              "native binary probes run after both workspace attempts; missing dependencies make probes unavailable rather than authorising another build"
+              "alternative success, probe outcomes and unsigned metadata do not establish a kill requester or cause; diagnostic wiring is not a maintained fix"
               "build/probe bounds have whole-second precision; boundary events need step timestamps and PID correlation and may remain ambiguous"
               "Coreutils is the expected resolved image of the declared cp symlink; realpath output records actual resolution without changing the immutable payload"
               "setup or host loss can prevent final collectors or upload; GitHub step outcomes and exit codes remain separate evidence"
@@ -331,7 +543,28 @@ jobs:
         if: ${{ always() && steps.evidence.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: dev1073-darwin-runtime-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/dev1073-darwin-diagnostic/
+          name: dev1073-darwin-comparison-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/dev1073-darwin-diagnostic/diagnose-darwin.yml
+            ${{ runner.temp }}/dev1073-darwin-diagnostic/declaration.*
+            ${{ runner.temp }}/dev1073-darwin-diagnostic/checkout-sha.*
+            ${{ runner.temp }}/dev1073-darwin-diagnostic/nix-version.*
+            ${{ runner.temp }}/dev1073-darwin-diagnostic/nix-floor.*
+            ${{ runner.temp }}/dev1073-darwin-diagnostic/tools.*
+            ${{ runner.temp }}/dev1073-darwin-diagnostic/tools-client-time-rusage.txt
+            ${{ runner.temp }}/dev1073-darwin-diagnostic/original.*
+            ${{ runner.temp }}/dev1073-darwin-diagnostic/original-*
+            ${{ runner.temp }}/dev1073-darwin-diagnostic/alternative.*
+            ${{ runner.temp }}/dev1073-darwin-diagnostic/alternative-*
+            ${{ runner.temp }}/dev1073-darwin-diagnostic/comparison-*
+            ${{ runner.temp }}/dev1073-darwin-diagnostic/bash-*
+            ${{ runner.temp }}/dev1073-darwin-diagnostic/cp-*
+            ${{ runner.temp }}/dev1073-darwin-diagnostic/coreutils-*
+            ${{ runner.temp }}/dev1073-darwin-diagnostic/rsync-*
+            ${{ runner.temp }}/dev1073-darwin-diagnostic/daemon-*
+            ${{ runner.temp }}/dev1073-darwin-diagnostic/builder-*
+            ${{ runner.temp }}/dev1073-darwin-diagnostic/memory-*
+            ${{ runner.temp }}/dev1073-darwin-diagnostic/termination-security.*
+            ${{ runner.temp }}/dev1073-darwin-diagnostic/outcomes-and-limits.*
           if-no-files-found: error
           retention-days: 7
