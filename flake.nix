@@ -138,6 +138,19 @@
           };
           checkWorkspace = copyLayout "backend-es-check-workspace"
             (pkgs.linkFarm "backend-es-check-layout" checkLayout);
+          diagnosticCheckLayout = pkgs.linkFarm "backend-es-check-layout" checkLayout;
+          diagnosticRsyncWorkspace = pkgs.stdenvNoCC.mkDerivation {
+            name = "backend-es-check-workspace-rsync";
+            buildCommand = ''
+              exec ${lib.getExe pkgs.rsync} --recursive --copy-links --executability ${diagnosticCheckLayout}/ ${builtins.placeholder "out"}
+            '';
+          };
+          diagnosticRsyncParity = pkgs.stdenvNoCC.mkDerivation {
+            name = "backend-es-check-workspace-rsync-parity";
+            buildCommand = ''
+              exec ${lib.getExe' pkgs.diffutils "diff"} --recursive ${diagnosticCheckLayout}/ ${diagnosticRsyncWorkspace}/ > ${builtins.placeholder "out"}
+            '';
+          };
           mkCheck = name: src: command: pkgs.mkSpagoDerivation {
             inherit name src;
             spagoYaml = ./spago.yaml;
@@ -349,7 +362,7 @@
           };
         in
         {
-          inherit upstreamDecoderEvidence;
+          inherit upstreamDecoderEvidence diagnosticCheckLayout diagnosticRsyncWorkspace diagnosticRsyncParity;
           packages = {
             inherit purs-backend-es;
             default = purs-backend-es;
@@ -408,7 +421,11 @@
     in
     {
       lib.upstreamDecoderEvidence = forAllSystems (system: perSystem.${system}.upstreamDecoderEvidence);
-      packages = forAllSystems (system: perSystem.${system}.packages // nixpkgs.lib.optionalAttrs (system == "x86_64-darwin") {
+      packages = forAllSystems (system: perSystem.${system}.packages // nixpkgs.lib.optionalAttrs (builtins.elem system [ "x86_64-linux" "x86_64-darwin" ]) {
+        diagnose-workspace-layout = perSystem.${system}.diagnosticCheckLayout;
+        diagnose-workspace-rsync = perSystem.${system}.diagnosticRsyncWorkspace;
+        diagnose-workspace-rsync-parity = perSystem.${system}.diagnosticRsyncParity;
+      } // nixpkgs.lib.optionalAttrs (system == "x86_64-darwin") {
         diagnose-darwin-workspace = perSystem.${system}.checks.build.src;
         diagnose-darwin-runtime = perSystem.${system}.packages.purs-backend-es.runtime;
       });
