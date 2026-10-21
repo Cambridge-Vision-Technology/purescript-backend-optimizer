@@ -142,7 +142,7 @@
           diagnosticRsyncWorkspace = pkgs.stdenvNoCC.mkDerivation {
             name = "backend-es-check-workspace-rsync";
             buildCommand = ''
-              exec ${lib.getExe pkgs.rsync} --recursive --copy-links --perms ${diagnosticCheckLayout}/ ${builtins.placeholder "out"}
+              exec ${lib.getExe pkgs.rsync} --recursive --copy-links --perms --chmod=Du+w ${diagnosticCheckLayout}/ ${builtins.placeholder "out"}
             '';
           };
           diagnosticRsyncParity = pkgs.stdenvNoCC.mkDerivation {
